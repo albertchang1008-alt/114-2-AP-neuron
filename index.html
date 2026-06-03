@@ -275,7 +275,17 @@
             </div>
             <p id="result-message" class="text-xl font-medium text-pink-600 mb-8"></p>
             <p id="save-status" class="text-sm text-blue-600 mb-4 font-medium"></p>
-            <div class="flex flex-col gap-3 justify-center mt-8 max-w-sm mx-auto">
+            <!-- ★ 閃卡複習提示橫幅（低分時顯示）-->
+            <div id="fc-hint-banner" class="hidden max-w-sm mx-auto mt-4 rounded-xl px-4 py-3 border-2 border-purple-200 bg-purple-50 text-left">
+                <p class="text-sm font-bold text-purple-700 mb-1">🃏 閃卡是你的秘笈！</p>
+                <p class="text-xs text-purple-600 mb-3">搭配解析複習錯題，比反覆測驗更有效率。</p>
+                <button onclick="openFlashcardModal(currentSelectedTopic)"
+                    class="w-full bg-purple-500 hover:bg-purple-600 text-white font-bold py-2.5 rounded-lg text-sm transition">
+                    🃏 立即開啟閃卡複習
+                </button>
+            </div>
+
+            <div class="flex flex-col gap-3 justify-center mt-4 max-w-sm mx-auto">
                 <div class="flex flex-col sm:flex-row gap-3">
                     <button id="btn-retry" onclick="startRetry()" class="hidden flex-1 bg-rose-500 hover:bg-rose-600 text-white font-bold py-3.5 px-6 rounded-xl transition shadow-md shadow-rose-200">錯題重做</button>
                     <button onclick="startFullQuiz(currentSelectedTopic)" class="flex-1 bg-sky-500 hover:bg-sky-600 text-white font-bold py-3.5 px-6 rounded-xl transition shadow-md shadow-sky-200">重新完整測驗</button>
@@ -298,7 +308,7 @@
 <!-- ★ 教師後台入口：藏在頁面底部，兩個「©」中間那個才是觸發點 -->
 <footer class="text-center py-4 mt-auto select-none">
     <span class="text-gray-200 text-xs">© 題庫系統</span>
-    <span class="text-gray-200 text-xs ml-2" id="version-badge" title="前端 v1.4 ／ 適配 GAS v9-4">v1.4</span>
+    <span class="text-gray-200 text-xs ml-2" id="version-badge" title="前端 v1.6 ／ 適配 GAS v9-6">v1.6</span>
     <button onclick="tryOpenAdminModal()"
             class="text-gray-200 text-xs ml-px hover:text-gray-300 focus:outline-none cursor-default"
             tabindex="-1" aria-hidden="true">©</button>
@@ -647,7 +657,1764 @@
 <!-- ══════════════════════════════════════════ -->
 <script>
 // ★ 將此 URL 換成你的 GAS Webapp URL
-const GAS_URL = 'https://script.google.com/macros/s/AKfycbyVAPaCD2RQ8KosHwObW00L7m-foWVdxwonDn0ftL6cukWsq_Mkz2VVskRQ8-gRMftp/exec';
+const GAS_URL = '// ╔══════════════════════════════════════════════════════════════╗
+// ║      Google Apps Script — 題庫系統  v9-5                     ║
+// ║      對應前端版本：quiz_final v1.4                           ║
+// ║                                                              ║
+// ║  更新紀錄：                                                   ║
+// ║  v9-5 - 新增 clearTopicCache() 工具函式                     ║
+// ║         分類快取不完整時可手動清空重建                        ║
+// ║       - handleGetTeacherData 輕量版：不讀題目作答明細        ║
+// ║         改由 handleGetDetailStats 懶載入（後台 Tab 切換時）  ║
+// ║       - classList2 修正：從成績紀錄計算，不依賴明細          ║
+// ║  v9-4 - Session Token 登入驗證 + 即時踢出（30秒輪詢）       ║
+// ║         loginStudent / verifySession action                  ║
+// ║       - 排行快取改用 Script Properties 分班存放              ║
+// ║         RANKING_SUMMARY / RANKING_CLASS_xxx                  ║
+// ║       - 新增「登入狀態」Sheet（學號/token/IP/裝置/瀏覽器）   ║
+// ║       - 新增 getClassStudents action（點班級懶載入）         ║
+// ║  v9-3 - 截止日倒數（系統設定 deadline 欄位）                ║
+// ║       - 學生成績總表每小時自動更新                           ║
+// ║         autoUpdateScoreSheet()：同時更新排行快取             ║
+// ║  v9-2 - 後台題目分析補入新題目（從題庫讀取）                 ║
+// ║  v9  - GAS 語法相容修正（不支援 spread/rest）                ║
+// ║  v8  - 分類快取、學生名單雜湊快取、排行快取                  ║
+// ║  v7  - batchJudge correctIndex / 閃卡圖片題修正              ║
+// ║  v6  - WrongIndex 錯題索引                                   ║
+// ║  v5  - 認知類型（M欄）、明細自動換頁                        ║
+// ║                                                              ║
+// ║  Sheet 結構：                                                 ║
+// ║   ├─ 題庫    A=ID B=分類 C=題目 D-G=選項 H=答案 I=解析      ║
+// ║   │          J=顏色 K=題型 L=圖片 M=認知類型                 ║
+// ║   ├─ 登入狀態  學號|姓名|token|時間|IP|裝置|瀏覽器|狀態     ║
+// ║   ├─ 系統設定  completion_pass_score / completion_topics     ║
+// ║   │            completion_classes / deadline                  ║
+// ║   ├─ 學生成績總表  班級|學號|姓名|分類1|...|完成度|更新時間  ║
+// ║   ├─ 分類快取 Sheet / 排行快取 Script Properties             ║
+// ║   ├─ WrongIndex、成績紀錄、題目作答明細（同前）              ║
+// ║   └─ 學生名單、管理人名單（同前）                            ║
+// ║                                                              ║
+// ║  部署後必做：                                                 ║
+// ║   1. 執行 rebuildWrongIndex()                                ║
+// ║   2. 執行 manualUpdateScoreTable()                           ║
+// ║   3. 設定觸發器：autoUpdateScoreSheet 每小時                 ║
+// ║   4. 系統設定 Sheet 新增 deadline 欄位                       ║
+// ╚══════════════════════════════════════════════════════════════╝
+
+const SHEET_QUESTIONS     = "題庫";
+const SHEET_SCORES        = "成績紀錄";
+const SHEET_DETAILS       = "題目作答明細";
+const SHEET_STUDENTS      = "學生名單";
+const SHEET_ADMINS        = "管理人名單";
+const SHEET_SETTINGS      = "系統設定";
+const SHEET_WRONG_IDX     = "WrongIndex";
+const SHEET_TOPIC_CACHE   = "分類快取";
+const SHEET_RANKING_CACHE = "排行快取";
+const SHEET_SCORE_TABLE   = "學生成績總表";  // ★ v9-3
+const SHEET_LOGIN_STATE   = "登入狀態";        // ★ v9-4
+
+// ─────────────────────────────────────────────
+// doGet：回傳分類清單＋標題
+//   ★ v9：分類快取用題庫行數做版本判斷（比 getLastUpdated 更穩定）
+//   ★ v8：學生名單雜湊快取（Script Properties）
+// ─────────────────────────────────────────────
+function doGet(e) {
+  try {
+    const ss    = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName(SHEET_QUESTIONS);
+    if (!sheet) throw new Error("找不到「" + SHEET_QUESTIONS + "」分頁");
+
+    // 讀取標題（A1/J1）
+    const firstRow   = sheet.getRange(1, 1, 1, 10).getValues()[0];
+    const title      = firstRow[0] ? firstRow[0].toString().trim() : "動態題庫測驗";
+    const titleColor = firstRow[9] ? firstRow[9].toString().trim() : "pink";
+
+    // ── ★ 分類快取：用題庫目前行數做版本號 ──
+    const currentRowCount = sheet.getLastRow();
+    var topics = null;
+    var cacheSheet = ss.getSheetByName(SHEET_TOPIC_CACHE);
+
+    if (cacheSheet && cacheSheet.getLastRow() >= 2) {
+      var cachedRowCount = cacheSheet.getRange("A1").getValue();
+      if (cachedRowCount && parseInt(cachedRowCount) === currentRowCount) {
+        // 快取有效：直接讀取
+        var cacheRows = cacheSheet.getRange(2, 1, cacheSheet.getLastRow() - 1, 2).getValues();
+        topics = [];
+        for (var ci = 0; ci < cacheRows.length; ci++) {
+          if (cacheRows[ci][0]) {
+            topics.push({ name: cacheRows[ci][0].toString(), color: cacheRows[ci][1] ? cacheRows[ci][1].toString() : "red" });
+          }
+        }
+      }
+    }
+
+    if (!topics) {
+      // 快取過期或不存在：掃描題庫重建
+      topics = buildTopicsAndUpdateCache(ss, sheet, currentRowCount);
+    }
+
+    // 學生名單雜湊快取
+    const studentHashes = getStudentHashesCached(ss);
+
+    // 完成度設定
+    const completionSettings = readSettings(ss);
+
+    // 班級清單
+    var classArr = [];
+    var stSheet  = ss.getSheetByName(SHEET_STUDENTS);
+    if (stSheet && stSheet.getLastRow() > 1) {
+      var stRows = stSheet.getDataRange().getValues();
+      var classSet = {};
+      for (var si = 1; si < stRows.length; si++) {
+        var cls = stRows[si][2] ? stRows[si][2].toString().trim() : "";
+        if (cls) classSet[cls] = true;
+      }
+      classArr = Object.keys(classSet).sort(function(a, b) { return a.localeCompare(b, "zh-TW"); });
+    }
+
+    return jsonResponse({ status: "success", title: title, titleColor: titleColor, topics: topics, studentHashes: studentHashes, completionSettings: completionSettings, allClassList: classArr, deadline: completionSettings.deadline || "" });
+  } catch (err) {
+    return jsonResponse({ status: "error", message: err.message });
+  }
+}
+
+// ── 掃描題庫建立分類清單，並更新快取 Sheet ──
+function buildTopicsAndUpdateCache(ss, sheet, currentRowCount) {
+  var rows    = sheet.getDataRange().getValues();
+  var headers = rows[0].map(function(h) { return h.toString().trim(); });
+
+  var iTop = -1;
+  var topNames = ["分類","category"];
+  for (var ni = 0; ni < topNames.length; ni++) {
+    var idx = headers.indexOf(topNames[ni]);
+    if (idx === -1) {
+      for (var hi = 0; hi < headers.length; hi++) {
+        if (headers[hi].toLowerCase() === topNames[ni].toLowerCase()) { idx = hi; break; }
+      }
+    }
+    if (idx !== -1) { iTop = idx; break; }
+  }
+  var COLOR_COL = 9;
+
+  var topicMap = {};
+  var topicOrder = [];
+  for (var i = 1; i < rows.length; i++) {
+    var top   = iTop !== -1 ? (rows[i][iTop] ? rows[i][iTop].toString().trim() : "未分類") : "未分類";
+    var color = rows[i][COLOR_COL] ? rows[i][COLOR_COL].toString().trim() : "red";
+    if (top && !topicMap[top]) {
+      topicMap[top] = color;
+      topicOrder.push(top);
+    }
+  }
+
+  var topics = [];
+  for (var ti = 0; ti < topicOrder.length; ti++) {
+    topics.push({ name: topicOrder[ti], color: topicMap[topicOrder[ti]] });
+  }
+
+  // 更新快取 Sheet
+  var cacheSheet = ss.getSheetByName(SHEET_TOPIC_CACHE);
+  if (!cacheSheet) {
+    cacheSheet = ss.insertSheet(SHEET_TOPIC_CACHE);
+    cacheSheet.getRange("A1").setFontWeight("bold").setBackground("#fef9c3");
+  }
+  cacheSheet.clearContents();
+  cacheSheet.getRange("A1").setValue(currentRowCount); // ★ 用行數當版本號
+  if (topics.length > 0) {
+    var cacheData = topics.map(function(t) { return [t.name, t.color]; });
+    cacheSheet.getRange(2, 1, cacheData.length, 2).setValues(cacheData);
+  }
+
+  return topics;
+}
+
+// ── 學生名單雜湊快取（Script Properties）──
+function getStudentHashesCached(ss) {
+  var props  = PropertiesService.getScriptProperties();
+  var sSheet = ss.getSheetByName(SHEET_STUDENTS);
+  if (!sSheet || sSheet.getLastRow() < 2) return [];
+
+  var lastRow = sSheet.getLastRow();
+  var lastSid = sSheet.getRange(lastRow, 1).getValue() ? sSheet.getRange(lastRow, 1).getValue().toString() : "";
+  var cacheKey  = "HASH_VER_" + lastRow + "_" + lastSid;
+  var cachedVer = props.getProperty("STUDENT_HASH_VER");
+  var cachedVal = props.getProperty("STUDENT_HASHES");
+
+  if (cachedVer === cacheKey && cachedVal) {
+    try { return JSON.parse(cachedVal); } catch(e) {}
+  }
+
+  var rows   = sSheet.getDataRange().getValues();
+  var hashes = [];
+  for (var i = 1; i < rows.length; i++) {
+    var sid  = rows[i][0] ? rows[i][0].toString().trim() : "";
+    var name = rows[i][1] ? rows[i][1].toString().trim() : "";
+    if (sid && name) hashes.push(hashString(sid + "|" + name));
+  }
+
+  props.setProperty("STUDENT_HASH_VER", cacheKey);
+  props.setProperty("STUDENT_HASHES", JSON.stringify(hashes));
+  return hashes;
+}
+
+// ─────────────────────────────────────────────
+// doPost
+// ─────────────────────────────────────────────
+function doPost(e) {
+  try {
+    var payload = JSON.parse(e.postData.contents);
+    var action  = payload.action;
+    if (action === "verifyStudent")      return handleVerifyStudent(payload);
+    if (action === "adminLogin")         return handleAdminLogin(payload);
+    if (action === "getTopicQuestions")  return handleGetTopicQuestions(payload);
+    if (action === "batchJudge")         return handleBatchJudge(payload);
+    if (action === "submitScore")        return handleSubmitScore(payload);
+    if (action === "submitAnswerDetail") return handleSubmitDetail(payload);
+    if (action === "saveSettings")       return handleSaveSettings(payload);
+    if (action === "getMyCompletion")      return handleGetMyCompletion(payload);
+    if (action === "getMyWrongQuestions")  return handleGetMyWrongQuestions(payload);
+    if (action === "getCompletionRanking") return handleGetCompletionRanking(payload);
+    if (action === "getTeacherData")        return handleGetTeacherData(payload);
+    if (action === "getStudentScoreTable")  return handleGetStudentScoreTable(payload);
+    if (action === "getDetailStats")         return handleGetDetailStats(payload);
+    if (action === "loginStudent")           return handleLoginStudent(payload);
+    if (action === "verifySession")          return handleVerifySession(payload);
+    if (action === "getClassStudents")       return handleGetClassStudents(payload);
+    return jsonResponse({ status: "error", message: "未知的 action：" + action });
+  } catch (err) {
+    return jsonResponse({ status: "error", message: err.message });
+  }
+}
+
+// ─────────────────────────────────────────────
+// Action 0：getTopicQuestions
+// ─────────────────────────────────────────────
+function handleGetTopicQuestions(payload) {
+  var topic     = payload.topic;
+  var flashcard = payload.flashcard;
+  var ss    = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(SHEET_QUESTIONS);
+  if (!sheet) return jsonResponse({ status: "error", message: "找不到題庫" });
+
+  var rows    = sheet.getDataRange().getValues();
+  var headers = rows[0].map(function(h) { return h.toString().trim(); });
+
+  function ci(names) {
+    for (var ni = 0; ni < names.length; ni++) {
+      for (var hi = 0; hi < headers.length; hi++) {
+        if (headers[hi] === names[ni] || headers[hi].toLowerCase() === names[ni].toLowerCase()) return hi;
+      }
+    }
+    return -1;
+  }
+
+  var iId  = ci(["ID"]);
+  var iTop = ci(["分類","category"]);
+  var iQ   = ci(["題目","question","q"]);
+  var iA   = ci(["選項A","選項1","optionA","a"]);
+  var iB   = ci(["選項B","選項2","optionB","b"]);
+  var iC   = ci(["選項C","選項3","optionC","c"]);
+  var iD   = ci(["選項D","選項4","optionD","d"]);
+  var iAns = ci(["正確答案","答案","answer","ans"]);
+  var iExp = ci(["解析","explanation"]);
+  var COLOR_COL = 9;
+  var TYPE_COL  = 10;
+  var IMG_COL   = 11;
+  var COG_COL   = 12;
+
+  var rawData = [];
+  var lastImgUrl = "";
+  for (var i = 1; i < rows.length; i++) {
+    var r   = rows[i];
+    var q   = iQ !== -1 ? (r[iQ] ? r[iQ].toString().trim() : "") : "";
+    if (!q) continue;
+    var qTop = iTop !== -1 ? (r[iTop] ? r[iTop].toString().trim() : "未分類") : "未分類";
+    if (topic !== "綜合練習" && qTop !== topic) continue;
+
+    var qId   = (iId !== -1 && r[iId]) ? r[iId].toString().trim() : "ROW_" + (i + 1);
+    var qType = r[TYPE_COL] ? r[TYPE_COL].toString().trim() : "";
+    var isImg = qType === "圖片" || qType.toLowerCase() === "image";
+
+    var imgUrl = r[IMG_COL] ? r[IMG_COL].toString().trim() : "";
+    if (isImg) {
+      if (imgUrl) lastImgUrl = imgUrl;
+      else imgUrl = lastImgUrl;
+    } else { lastImgUrl = ""; }
+
+    var optA = iA !== -1 ? (r[iA] ? r[iA].toString().trim() : "") : "";
+    var optB = iB !== -1 ? (r[iB] ? r[iB].toString().trim() : "") : "";
+    var optC = iC !== -1 ? (r[iC] ? r[iC].toString().trim() : "") : "";
+    var optD = iD !== -1 ? (r[iD] ? r[iD].toString().trim() : "") : "";
+    var allOpts = [optA, optB, optC, optD];
+
+    var rawAnsVal = iAns !== -1 ? (r[iAns] ? r[iAns].toString().trim() : "") : "";
+    var ans = "";
+    if (isImg) {
+      var up = rawAnsVal.toUpperCase();
+      if (["A","B","C","D"].indexOf(up) !== -1) ans = allOpts[up.charCodeAt(0) - 65] || optA;
+      else if (["1","2","3","4"].indexOf(up) !== -1) ans = allOpts[parseInt(up) - 1] || optA;
+      else ans = optA;
+    } else {
+      var up2 = rawAnsVal.toUpperCase();
+      if (["A","B","C","D"].indexOf(up2) !== -1) ans = allOpts[up2.charCodeAt(0) - 65] || "";
+      else if (["1","2","3","4"].indexOf(up2) !== -1) ans = allOpts[parseInt(up2) - 1] || "";
+      else {
+        var clean = rawAnsVal.replace(/^([1-4]|[A-D])[.\-、\s]*/i,"").trim().toLowerCase();
+        for (var oi = 0; oi < allOpts.length; oi++) {
+          if (allOpts[oi].replace(/^([1-4]|[A-D])[.\-、\s]*/i,"").trim().toLowerCase() === clean) { ans = allOpts[oi]; break; }
+        }
+        if (!ans) ans = rawAnsVal;
+      }
+    }
+
+    var exp = iExp !== -1 ? (r[iExp] ? r[iExp].toString().trim() : "尚無解析") : "尚無解析";
+    rawData.push({
+      id: qId, top: qTop, q: q, ans: ans,
+      rawOpts: isImg ? [] : allOpts.filter(function(o) { return o; }),
+      allOpts: allOpts, exp: exp,
+      color: r[COLOR_COL] ? r[COLOR_COL].toString().trim() : "red",
+      isImage: isImg, imgUrl: imgUrl,
+      cogType: r[COG_COL] ? r[COG_COL].toString().trim() : "",
+    });
+  }
+
+  // 圖片題組裝
+  var imgGroupMap = {};
+  rawData.forEach(function(q) {
+    if (q.isImage && q.imgUrl) {
+      if (!imgGroupMap[q.imgUrl]) imgGroupMap[q.imgUrl] = [];
+      imgGroupMap[q.imgUrl].push({ id: q.id, ans: q.ans });
+    }
+  });
+  var allImageAnsSet = {};
+  rawData.forEach(function(q) { if (q.isImage && q.ans) allImageAnsSet[q.ans] = true; });
+  var allImageAnsPool = Object.keys(allImageAnsSet);
+
+  var data = rawData.map(function(q) {
+    var options = q.rawOpts;
+    if (q.isImage && q.imgUrl) {
+      var selfAns = q.ans;
+      var grp = imgGroupMap[q.imgUrl] || [];
+      var sameGroupAns = [];
+      grp.forEach(function(g) { if (g.id !== q.id && g.ans) sameGroupAns.push(g.ans); });
+      var usedSet = {};
+      usedSet[selfAns] = true;
+      sameGroupAns.forEach(function(a) { usedSet[a] = true; });
+      var fallback = allImageAnsPool.filter(function(a) { return !usedSet[a]; });
+      var candidates = sameGroupAns.concat(fallback);
+      for (var ci2 = candidates.length - 1; ci2 > 0; ci2--) {
+        var j = Math.floor(Math.random() * (ci2 + 1));
+        var tmp = candidates[ci2]; candidates[ci2] = candidates[j]; candidates[j] = tmp;
+      }
+      options = [selfAns].concat(candidates.slice(0, 3)).filter(Boolean);
+    }
+    var item = { id: q.id, top: q.top, q: q.q, options: options, color: q.color, isImage: q.isImage, cogType: q.cogType || "" };
+    if (q.isImage && q.imgUrl) item.imgUrl = q.imgUrl;
+    if (flashcard) { item.ans = q.ans; item.exp = q.exp; }
+    return item;
+  });
+
+  return jsonResponse({ status: "ok", data: data });
+}
+
+// ─────────────────────────────────────────────
+// Action 1：verifyStudent
+// ─────────────────────────────────────────────
+function handleVerifyStudent(payload) {
+  var studentId = payload.studentId;
+  var name = payload.name;
+  var ss    = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(SHEET_STUDENTS);
+  if (!sheet || sheet.getLastRow() < 2)
+    return jsonResponse({ status: "ok", verified: true });
+  var rows = sheet.getDataRange().getValues();
+  for (var i = 1; i < rows.length; i++) {
+    if (rows[i][0] && rows[i][0].toString().trim() === studentId.trim() &&
+        rows[i][1] && rows[i][1].toString().trim() === name.trim())
+      return jsonResponse({ status: "ok", verified: true });
+  }
+  return jsonResponse({ status: "ok", verified: false, message: "學號或姓名不符" });
+}
+
+// ─────────────────────────────────────────────
+// Action 2：adminLogin
+// ─────────────────────────────────────────────
+function handleAdminLogin(payload) {
+  var adminId = payload.adminId;
+  var adminPassword = payload.adminPassword;
+  var ss    = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(SHEET_ADMINS);
+  if (!sheet || sheet.getLastRow() < 2)
+    return jsonResponse({ status: "error", message: "尚未建立「管理人名單」分頁" });
+  var rows = sheet.getDataRange().getValues();
+  for (var i = 1; i < rows.length; i++) {
+    if (rows[i][0] && rows[i][0].toString().trim() === adminId.trim() &&
+        rows[i][1] && rows[i][1].toString().trim() === adminPassword.trim())
+      return jsonResponse({ status: "ok", verified: true, adminName: adminId });
+  }
+  return jsonResponse({ status: "ok", verified: false, message: "帳號或密碼錯誤" });
+}
+
+// ─────────────────────────────────────────────
+// Action 3：batchJudge
+// ─────────────────────────────────────────────
+function handleBatchJudge(payload) {
+  var answers = payload.answers || [];
+  if (answers.length === 0) return jsonResponse({ status: "ok", results: [] });
+
+  var ss      = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet   = ss.getSheetByName(SHEET_QUESTIONS);
+  var rows    = sheet.getDataRange().getValues();
+  var headers = rows[0].map(function(h) { return h.toString().trim(); });
+
+  var iId  = findColIdx(headers, ["ID"]);
+  var iAns = findColIdx(headers, ["正確答案","答案","answer","ans"]);
+  var iExp = findColIdx(headers, ["解析","explanation"]);
+  var iA   = findColIdx(headers, ["選項A","選項1","optionA","a"]);
+  var iB   = findColIdx(headers, ["選項B","選項2","optionB","b"]);
+  var iC   = findColIdx(headers, ["選項C","選項3","optionC","c"]);
+  var iD   = findColIdx(headers, ["選項D","選項4","optionD","d"]);
+  var TYPE_COL = 10;
+
+  var questionMap = {};
+  for (var i = 1; i < rows.length; i++) {
+    var r      = rows[i];
+    var qId    = (iId !== -1 && r[iId]) ? r[iId].toString().trim() : "ROW_" + (i + 1);
+    var rawAns = iAns !== -1 ? (r[iAns] ? r[iAns].toString().trim() : "") : "";
+    var exp    = iExp !== -1 ? (r[iExp] ? r[iExp].toString().trim() : "尚無解析") : "尚無解析";
+    var qType  = r[TYPE_COL] ? r[TYPE_COL].toString().trim() : "";
+    var isImage = qType === "圖片" || qType.toLowerCase() === "image";
+
+    var allOptions = [];
+    [iA, iB, iC, iD].forEach(function(idx) {
+      if (idx !== -1 && r[idx]) allOptions.push(r[idx].toString().trim());
+    });
+
+    var correctText = "";
+    if (isImage) {
+      var upImg = rawAns.toUpperCase();
+      if (["A","B","C","D"].indexOf(upImg) !== -1) correctText = allOptions[upImg.charCodeAt(0) - 65] || "";
+      else if (["1","2","3","4"].indexOf(upImg) !== -1) correctText = allOptions[parseInt(upImg) - 1] || "";
+      else correctText = allOptions[0] || rawAns;
+    } else {
+      var upperAns = rawAns.toUpperCase();
+      if (["A","B","C","D"].indexOf(upperAns) !== -1) {
+        correctText = allOptions[upperAns.charCodeAt(0) - 65] || "";
+      } else if (["1","2","3","4"].indexOf(upperAns) !== -1) {
+        correctText = allOptions[parseInt(upperAns) - 1] || "";
+      } else {
+        var cleanAns = rawAns.replace(/^([1-4]|[A-D])[.\-、\s]*/i,"").trim().toLowerCase();
+        for (var oi = 0; oi < allOptions.length; oi++) {
+          if (allOptions[oi].replace(/^([1-4]|[A-D])[.\-、\s]*/i,"").trim().toLowerCase() === cleanAns) {
+            correctText = allOptions[oi]; break;
+          }
+        }
+        if (!correctText) correctText = rawAns;
+      }
+    }
+    questionMap[qId] = { correctText: correctText, exp: exp };
+  }
+
+  var results = answers.map(function(ans) {
+    var questionId  = ans.questionId;
+    var selectedText = ans.selectedText;
+    var shuffledOpts = ans.shuffledOpts;
+    var q = questionMap[questionId];
+    if (!q) return { questionId: questionId, correct: false, correctText: "", correctIndex: -1, exp: "找不到此題目" };
+
+    var cleanSel  = (selectedText || "").replace(/^([1-4]|[A-D])[.\-、\s]*/i,"").trim().toLowerCase().replace(/\s+/g," ");
+    var cleanCorr = q.correctText.replace(/^([1-4]|[A-D])[.\-、\s]*/i,"").trim().toLowerCase().replace(/\s+/g," ");
+    var correct   = cleanSel === cleanCorr;
+
+    var correctIndex = -1;
+    if (shuffledOpts && Array.isArray(shuffledOpts)) {
+      for (var si = 0; si < shuffledOpts.length; si++) {
+        var cleanOpt = shuffledOpts[si].replace(/^([1-4]|[A-D])[.\-、\s]*/i,"").trim().toLowerCase().replace(/\s+/g," ");
+        if (cleanOpt === cleanCorr) { correctIndex = si; break; }
+      }
+    }
+    return { questionId: questionId, correct: correct, correctText: q.correctText, correctIndex: correctIndex, exp: q.exp };
+  });
+
+  return jsonResponse({ status: "ok", results: results });
+}
+
+// ─────────────────────────────────────────────
+// Action 4：submitScore
+// ─────────────────────────────────────────────
+function handleSubmitScore(payload) {
+  var ss  = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(SHEET_SCORES);
+  if (!sheet) sheet = ss.insertSheet(SHEET_SCORES);
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(["時間戳記","學號","姓名","測驗單元","測驗模式","第幾次","分數","答對題數","答錯題數"]);
+    sheet.getRange(1,1,1,9).setFontWeight("bold").setBackground("#fce7f3");
+  }
+  sheet.appendRow([localNow(), payload.studentId, payload.name, payload.topic, payload.mode, payload.attempt, payload.score, payload.correctCount, payload.wrongCount]);
+  invalidateRankingCache(ss);
+  return jsonResponse({ status: "ok" });
+}
+
+// ─────────────────────────────────────────────
+// Action 5：submitAnswerDetail（含自動換頁）
+// ─────────────────────────────────────────────
+const MAX_DETAIL_ROWS = 20000;
+const DETAIL_HEADER   = ["時間戳記","學號","姓名","題目ID","題目內容","單元","學生選項","正確答案","是否答對","測驗模式","第幾次"];
+
+function getActiveDetailSheet(ss) {
+  var sheet = ss.getSheetByName(SHEET_DETAILS);
+  if (!sheet) {
+    sheet = ss.insertSheet(SHEET_DETAILS);
+    sheet.appendRow(DETAIL_HEADER);
+    sheet.getRange(1,1,1,11).setFontWeight("bold").setBackground("#e0f2fe");
+    return sheet;
+  }
+  if (sheet.getLastRow() - 1 >= MAX_DETAIL_ROWS) {
+    var now     = new Date(new Date().getTime() + 8 * 60 * 60 * 1000);
+    var yyyymm  = now.getUTCFullYear() + "-" + String(now.getUTCMonth()+1).padStart(2,"0");
+    var archiveName = SHEET_DETAILS + "_" + yyyymm;
+    var suffix = 1;
+    while (ss.getSheetByName(archiveName)) archiveName = SHEET_DETAILS + "_" + yyyymm + "_" + (suffix++);
+    sheet.setName(archiveName);
+    sheet.setFrozenRows(1);
+    sheet = ss.insertSheet(SHEET_DETAILS);
+    sheet.appendRow(DETAIL_HEADER);
+    sheet.getRange(1,1,1,11).setFontWeight("bold").setBackground("#e0f2fe");
+  }
+  return sheet;
+}
+
+function handleSubmitDetail(payload) {
+  var ss    = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = getActiveDetailSheet(ss);
+  var rows  = (payload.details || []).map(function(d) {
+    return [localNow(), payload.studentId, payload.name, d.questionId, d.questionText, d.topic, d.selectedText, d.correctText, d.isCorrect ? "答對" : "答錯", payload.mode, payload.attempt];
+  });
+  if (rows.length > 0) sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 11).setValues(rows);
+  updateWrongIndex(ss, payload.studentId, payload.details || []);
+  return jsonResponse({ status: "ok" });
+}
+
+// ─────────────────────────────────────────────
+// WrongIndex 維護
+// ─────────────────────────────────────────────
+function getOrCreateWrongIndexSheet(ss) {
+  var sheet = ss.getSheetByName(SHEET_WRONG_IDX);
+  if (!sheet) {
+    sheet = ss.insertSheet(SHEET_WRONG_IDX);
+    sheet.appendRow(["學號","題目ID","題目分類","最新結果","最後作答時間"]);
+    sheet.getRange(1,1,1,5).setFontWeight("bold").setBackground("#fef3c7");
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
+}
+
+function updateWrongIndex(ss, studentId, details) {
+  if (!details.length) return;
+  var sheet   = getOrCreateWrongIndexSheet(ss);
+  var lastRow = sheet.getLastRow();
+  var keyToRow = {};
+  if (lastRow > 1) {
+    var data = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
+    for (var i = 0; i < data.length; i++) {
+      var key = data[i][0] + "|" + data[i][1];
+      keyToRow[key] = i + 2;
+    }
+  }
+  var now     = localNow();
+  var updates = [];
+  var appends = [];
+  details.forEach(function(d) {
+    var key    = studentId + "|" + d.questionId;
+    var result = d.isCorrect ? "答對" : "答錯";
+    var vals   = [studentId, d.questionId, d.topic, result, now];
+    if (keyToRow[key]) updates.push({ row: keyToRow[key], vals: vals });
+    else               appends.push(vals);
+  });
+  updates.forEach(function(u) { sheet.getRange(u.row, 1, 1, 5).setValues([u.vals]); });
+  if (appends.length > 0) sheet.getRange(sheet.getLastRow() + 1, 1, appends.length, 5).setValues(appends);
+}
+
+// ─────────────────────────────────────────────
+// 【工具函式】重建 WrongIndex
+// ─────────────────────────────────────────────
+function rebuildWrongIndex() {
+  var ss         = SpreadsheetApp.getActiveSpreadsheet();
+  var allSheets  = ss.getSheets();
+  var detailSheets = allSheets.filter(function(s) {
+    return s.getName() === SHEET_DETAILS || s.getName().indexOf(SHEET_DETAILS + "_") === 0;
+  }).sort(function(a,b) { return a.getName().localeCompare(b.getName()); });
+
+  var indexMap = {};
+  for (var di = 0; di < detailSheets.length; di++) {
+    var dSheet = detailSheets[di];
+    if (dSheet.getLastRow() <= 1) continue;
+    var rows = dSheet.getDataRange().getValues();
+    for (var i = 1; i < rows.length; i++) {
+      var ts = rows[i][0], sid = rows[i][1], qid = rows[i][3], topic = rows[i][5], result = rows[i][8];
+      if (!sid || !qid) continue;
+      var key = sid.toString() + "|" + qid.toString();
+      indexMap[key] = { sid: sid.toString(), qid: qid.toString(), topic: topic ? topic.toString() : "", result: result ? result.toString() : "", time: ts ? ts.toString() : "" };
+    }
+  }
+
+  var sheet = ss.getSheetByName(SHEET_WRONG_IDX);
+  if (sheet) ss.deleteSheet(sheet);
+  sheet = getOrCreateWrongIndexSheet(ss);
+
+  var vals = Object.keys(indexMap).map(function(k) {
+    var v = indexMap[k];
+    return [v.sid, v.qid, v.topic, v.result, v.time];
+  });
+  if (vals.length > 0) sheet.getRange(2, 1, vals.length, 5).setValues(vals);
+  Logger.log("✅ WrongIndex 重建完成，共 " + vals.length + " 筆");
+}
+
+// ─────────────────────────────────────────────
+// 【工具函式】手動封存超量分頁
+// ─────────────────────────────────────────────
+function manualArchiveDetailSheet() {
+  var ss    = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(SHEET_DETAILS);
+  if (!sheet) { Logger.log("找不到「題目作答明細」分頁"); return; }
+  var rowCount = sheet.getLastRow() - 1;
+  Logger.log("目前列數：" + rowCount);
+  if (rowCount <= MAX_DETAIL_ROWS) { Logger.log("列數未超過上限，不需封存"); return; }
+  var now  = new Date(new Date().getTime() + 8 * 60 * 60 * 1000);
+  var yyyymm = now.getUTCFullYear() + "-" + String(now.getUTCMonth()+1).padStart(2,"0");
+  var archiveName = SHEET_DETAILS + "_" + yyyymm;
+  var suffix = 1;
+  while (ss.getSheetByName(archiveName)) archiveName = SHEET_DETAILS + "_" + yyyymm + "_" + (suffix++);
+  sheet.setName(archiveName);
+  sheet.setFrozenRows(1);
+  Logger.log("✅ 已封存為「" + archiveName + "」");
+  var newSheet = ss.insertSheet(SHEET_DETAILS);
+  newSheet.appendRow(DETAIL_HEADER);
+  newSheet.getRange(1,1,1,11).setFontWeight("bold").setBackground("#e0f2fe");
+  Logger.log("✅ 已建立新的「" + SHEET_DETAILS + "」分頁");
+}
+
+// ─────────────────────────────────────────────
+// Action：saveSettings
+// ─────────────────────────────────────────────
+function handleSaveSettings(payload) {
+  var ss      = SpreadsheetApp.getActiveSpreadsheet();
+  var pass    = parseInt(payload.passScore || "80");
+  var topics  = payload.completionTopics  || [];
+  var classes = payload.completionClasses || [];
+  writeSettings(ss, pass, topics, classes);
+  invalidateRankingCache(ss);
+  return jsonResponse({ status: "ok" });
+}
+
+// ─────────────────────────────────────────────
+// Action：getMyWrongQuestions（使用 WrongIndex）
+// ─────────────────────────────────────────────
+function handleGetMyWrongQuestions(payload) {
+  var studentId = payload.studentId;
+  var topic     = payload.topic;
+  var hours     = payload.hours;
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  var cutoff = (hours && hours > 0) ? new Date(new Date().getTime() - hours * 60 * 60 * 1000) : null;
+
+  var wiSheet = ss.getSheetByName(SHEET_WRONG_IDX);
+  if (!wiSheet || wiSheet.getLastRow() <= 1) return jsonResponse({ status: "ok", questions: [] });
+
+  var rows = wiSheet.getDataRange().getValues();
+  var wrongQids = [];
+  for (var i = 1; i < rows.length; i++) {
+    var sid    = rows[i][0] ? rows[i][0].toString() : "";
+    var qid    = rows[i][1] ? rows[i][1].toString() : "";
+    var qtopic = rows[i][2] ? rows[i][2].toString() : "";
+    var result = rows[i][3] ? rows[i][3].toString() : "";
+    var ts     = rows[i][4];
+    if (sid !== studentId) continue;
+    if (result !== "答錯") continue;
+    if (topic !== "綜合練習" && qtopic !== topic) continue;
+    if (cutoff && ts) {
+      var rowDate = ts instanceof Date ? ts : new Date(ts);
+      if (!isNaN(rowDate) && rowDate < cutoff) continue;
+    }
+    wrongQids.push(qid);
+  }
+
+  if (!wrongQids.length) return jsonResponse({ status: "ok", questions: [] });
+  var wrongSet = {};
+  wrongQids.forEach(function(q) { wrongSet[q] = true; });
+
+  var qSheet = ss.getSheetByName(SHEET_QUESTIONS);
+  if (!qSheet) return jsonResponse({ status: "ok", questions: [] });
+
+  var qRows    = qSheet.getDataRange().getValues();
+  var qHeaders = qRows[0].map(function(h) { return h.toString().trim(); });
+
+  function ci2(names) {
+    for (var ni = 0; ni < names.length; ni++) {
+      for (var hi = 0; hi < qHeaders.length; hi++) {
+        if (qHeaders[hi] === names[ni] || qHeaders[hi].toLowerCase() === names[ni].toLowerCase()) return hi;
+      }
+    }
+    return -1;
+  }
+
+  var iId2  = ci2(["ID"]);
+  var iTop2 = ci2(["分類","category"]);
+  var iQ2   = ci2(["題目","question","q"]);
+  var iA2   = ci2(["選項A","選項1","optionA","a"]);
+  var iB2   = ci2(["選項B","選項2","optionB","b"]);
+  var iC2   = ci2(["選項C","選項3","optionC","c"]);
+  var iD2   = ci2(["選項D","選項4","optionD","d"]);
+  var iAns2 = ci2(["正確答案","答案","answer","ans"]);
+  var iExp2 = ci2(["解析","explanation"]);
+  var COLOR2 = 9, TYPE2 = 10, IMG2 = 11, COG2 = 12;
+
+  // 建立 imgUrlMap
+  var imgUrlMap = {};
+  var lastImgUrl2 = "";
+  for (var i2 = 1; i2 < qRows.length; i2++) {
+    var r2   = qRows[i2];
+    var qid2 = (iId2 !== -1 && r2[iId2]) ? r2[iId2].toString().trim() : "ROW_" + (i2 + 1);
+    var qType2 = r2[TYPE2] ? r2[TYPE2].toString().trim() : "";
+    var isImg2 = qType2 === "圖片" || qType2.toLowerCase() === "image";
+    var imgUrl2 = r2[IMG2] ? r2[IMG2].toString().trim() : "";
+    if (isImg2) {
+      if (imgUrl2) lastImgUrl2 = imgUrl2;
+      else imgUrl2 = lastImgUrl2;
+    } else { lastImgUrl2 = ""; }
+    imgUrlMap[qid2] = { isImg: isImg2, imgUrl: imgUrl2 };
+  }
+
+  // 圖片題組資料
+  var imgGroupMap2 = {};
+  var allImgAnsPool2 = [];
+  for (var i3 = 1; i3 < qRows.length; i3++) {
+    var r3   = qRows[i3];
+    var qid3 = (iId2 !== -1 && r3[iId2]) ? r3[iId2].toString().trim() : "ROW_" + (i3 + 1);
+    var info3 = imgUrlMap[qid3] || {};
+    if (!info3.isImg || !info3.imgUrl) continue;
+    var rawAns3 = iAns2 !== -1 ? (r3[iAns2] ? r3[iAns2].toString().trim() : "") : "";
+    var oA3 = iA2 !== -1 ? (r3[iA2] ? r3[iA2].toString().trim() : "") : "";
+    var oB3 = iB2 !== -1 ? (r3[iB2] ? r3[iB2].toString().trim() : "") : "";
+    var oC3 = iC2 !== -1 ? (r3[iC2] ? r3[iC2].toString().trim() : "") : "";
+    var oD3 = iD2 !== -1 ? (r3[iD2] ? r3[iD2].toString().trim() : "") : "";
+    var ans3 = "";
+    var up3 = rawAns3.toUpperCase();
+    if (["A","B","C","D"].indexOf(up3) !== -1) ans3 = [oA3,oB3,oC3,oD3][up3.charCodeAt(0)-65] || "";
+    else if (["1","2","3","4"].indexOf(up3) !== -1) ans3 = [oA3,oB3,oC3,oD3][parseInt(up3)-1] || "";
+    else ans3 = oA3;
+    if (!imgGroupMap2[info3.imgUrl]) imgGroupMap2[info3.imgUrl] = [];
+    imgGroupMap2[info3.imgUrl].push({ qid: qid3, ans: ans3 });
+    if (ans3) allImgAnsPool2.push(ans3);
+  }
+
+  var questions = [];
+  for (var i4 = 1; i4 < qRows.length; i4++) {
+    var r4   = qRows[i4];
+    var qid4 = (iId2 !== -1 && r4[iId2]) ? r4[iId2].toString().trim() : "ROW_" + (i4 + 1);
+    if (!wrongSet[qid4]) continue;
+    var q4 = iQ2 !== -1 ? (r4[iQ2] ? r4[iQ2].toString().trim() : "") : "";
+    if (!q4) continue;
+
+    var oA4 = iA2 !== -1 ? (r4[iA2] ? r4[iA2].toString().trim() : "") : "";
+    var oB4 = iB2 !== -1 ? (r4[iB2] ? r4[iB2].toString().trim() : "") : "";
+    var oC4 = iC2 !== -1 ? (r4[iC2] ? r4[iC2].toString().trim() : "") : "";
+    var oD4 = iD2 !== -1 ? (r4[iD2] ? r4[iD2].toString().trim() : "") : "";
+    var info4 = imgUrlMap[qid4] || { isImg: false, imgUrl: "" };
+    var rawAns4 = iAns2 !== -1 ? (r4[iAns2] ? r4[iAns2].toString().trim() : "") : "";
+    var ans4 = "";
+    var up4 = rawAns4.toUpperCase();
+    if (["A","B","C","D"].indexOf(up4) !== -1) ans4 = [oA4,oB4,oC4,oD4][up4.charCodeAt(0)-65] || "";
+    else if (["1","2","3","4"].indexOf(up4) !== -1) ans4 = [oA4,oB4,oC4,oD4][parseInt(up4)-1] || "";
+    else {
+      var clean4 = rawAns4.replace(/^([1-4]|[A-D])[.\-、\s]*/i,"").trim().toLowerCase();
+      var opts4  = [oA4,oB4,oC4,oD4].filter(Boolean);
+      for (var oi4 = 0; oi4 < opts4.length; oi4++) {
+        if (opts4[oi4].replace(/^([1-4]|[A-D])[.\-、\s]*/i,"").trim().toLowerCase() === clean4) { ans4 = opts4[oi4]; break; }
+      }
+      if (!ans4) ans4 = rawAns4;
+    }
+
+    var opts4Final;
+    if (info4.isImg && info4.imgUrl) {
+      var selfAns4 = ans4;
+      var grp4 = imgGroupMap2[info4.imgUrl] || [];
+      var sameGrp4 = [];
+      grp4.forEach(function(g) { if (g.qid !== qid4 && g.ans) sameGrp4.push(g.ans); });
+      var usedSet4 = {};
+      usedSet4[selfAns4] = true;
+      sameGrp4.forEach(function(a) { usedSet4[a] = true; });
+      var fallback4 = allImgAnsPool2.filter(function(a) { return !usedSet4[a]; });
+      var cands4 = sameGrp4.concat(fallback4);
+      for (var ci4 = cands4.length - 1; ci4 > 0; ci4--) {
+        var j4 = Math.floor(Math.random() * (ci4 + 1));
+        var tmp4 = cands4[ci4]; cands4[ci4] = cands4[j4]; cands4[j4] = tmp4;
+      }
+      opts4Final = [selfAns4].concat(cands4.slice(0, 3)).filter(Boolean);
+    } else {
+      opts4Final = [oA4,oB4,oC4,oD4].filter(Boolean);
+    }
+
+    questions.push({
+      id:      qid4,
+      top:     iTop2 !== -1 ? (r4[iTop2] ? r4[iTop2].toString().trim() : "未分類") : "未分類",
+      q:       q4,
+      options: opts4Final,
+      ans:     ans4,
+      exp:     iExp2 !== -1 ? (r4[iExp2] ? r4[iExp2].toString().trim() : "尚無解析") : "尚無解析",
+      color:   r4[COLOR2] ? r4[COLOR2].toString().trim() : "red",
+      cogType: r4[COG2]   ? r4[COG2].toString().trim()   : "",
+      isImage: info4.isImg,
+      imgUrl:  info4.isImg ? info4.imgUrl : "",
+    });
+  }
+
+  return jsonResponse({ status: "ok", questions: questions });
+}
+
+// ─────────────────────────────────────────────
+// Action：getMyCompletion
+// ─────────────────────────────────────────────
+function handleGetMyCompletion(payload) {
+  var studentId = payload.studentId;
+  var ss        = SpreadsheetApp.getActiveSpreadsheet();
+  var settings  = readSettings(ss);
+  var passScore = settings.passScore;
+  var reqTopics = settings.completionTopics;
+
+  if (!reqTopics.length) return jsonResponse({ status: "ok", passScore: passScore, completionTopics: [], details: [] });
+
+  var scoreSheet = ss.getSheetByName(SHEET_SCORES);
+  var topicBest  = {};
+  if (scoreSheet && scoreSheet.getLastRow() > 1) {
+    var sRows = scoreSheet.getDataRange().getValues();
+    for (var i = 1; i < sRows.length; i++) {
+      var sid   = sRows[i][1] ? sRows[i][1].toString() : "";
+      var topic = sRows[i][3] ? sRows[i][3].toString() : "";
+      var mode  = sRows[i][4] ? sRows[i][4].toString() : "";
+      var score = Number(sRows[i][6]);
+      if (sid !== studentId) continue;
+      if (mode === "錯題重做") continue;
+      if (score > (topicBest[topic] || 0)) topicBest[topic] = score;
+    }
+  }
+
+  var details = reqTopics.map(function(t) {
+    return { topic: t, best: (topicBest[t] !== undefined ? topicBest[t] : null), passed: (topicBest[t] || 0) >= passScore };
+  });
+  return jsonResponse({ status: "ok", passScore: passScore, completionTopics: reqTopics, details: details });
+}
+
+// ─────────────────────────────────────────────
+// Action：getCompletionRanking（含排行快取）
+// ─────────────────────────────────────────────
+function handleGetCompletionRanking(payload) {
+  var ss       = SpreadsheetApp.getActiveSpreadsheet();
+  var settings = readSettings(ss);
+  var passScore  = settings.passScore;
+  var reqTopics  = settings.completionTopics;
+  var reqClasses = settings.completionClasses || [];
+  var fullMode   = payload.full === true; // ★ full:true 略過快取，回傳含 students 的完整資料
+
+  if (!reqTopics.length) return jsonResponse({ status: "ok", passScore: passScore, completionTopics: [], ranking: [] });
+
+  // ★ v9-4：非 full 模式才讀快取（改用 Script Properties）
+  if (!fullMode) {
+    var cached = getRankingCacheProps(ss);
+    if (cached) return jsonResponse(cached);
+  }
+
+  // 重新計算
+  var stuSheet   = ss.getSheetByName(SHEET_STUDENTS);
+  var scoreSheet = ss.getSheetByName(SHEET_SCORES);
+
+  var studentInfoMap = {};
+  if (stuSheet && stuSheet.getLastRow() > 1) {
+    var stRows = stuSheet.getDataRange().getValues();
+    for (var i = 1; i < stRows.length; i++) {
+      var sid = stRows[i][0] ? stRows[i][0].toString().trim() : "";
+      if (sid) studentInfoMap[sid] = { name: stRows[i][1] ? stRows[i][1].toString().trim() : "", class: stRows[i][2] ? stRows[i][2].toString().trim() : "未分班" };
+    }
+  }
+
+  var studentTopicBest = {};
+  if (scoreSheet && scoreSheet.getLastRow() > 1) {
+    var scRows = scoreSheet.getDataRange().getValues();
+    for (var i2 = 1; i2 < scRows.length; i2++) {
+      var sid2   = scRows[i2][1] ? scRows[i2][1].toString() : "";
+      var topic2 = scRows[i2][3] ? scRows[i2][3].toString() : "";
+      var mode2  = scRows[i2][4] ? scRows[i2][4].toString() : "";
+      var score2 = Number(scRows[i2][6]);
+      if (!sid2 || mode2 === "錯題重做") continue;
+      if (!studentTopicBest[sid2]) studentTopicBest[sid2] = {};
+      if (score2 > (studentTopicBest[sid2][topic2] || 0)) studentTopicBest[sid2][topic2] = score2;
+    }
+  }
+
+  var classMap = {};
+  Object.keys(studentInfoMap).forEach(function(sid) {
+    var info = studentInfoMap[sid];
+    var cls  = info.class;
+    if (reqClasses.length > 0 && reqClasses.indexOf(cls) === -1) return;
+    if (!classMap[cls]) classMap[cls] = { students: {} };
+    var topicBest = studentTopicBest[sid] || {};
+    var completed = reqTopics.filter(function(t) { return (topicBest[t] || 0) >= passScore; }).length;
+    var details   = reqTopics.map(function(t) { return { topic: t, best: topicBest[t] || null, passed: (topicBest[t] || 0) >= passScore }; });
+    classMap[cls].students[sid] = { name: info.name, completed: completed, total: reqTopics.length, details: details };
+  });
+
+  var ranking = Object.keys(classMap).map(function(cls) {
+    var stuArr    = Object.keys(classMap[cls].students);
+    var totalComp = stuArr.reduce(function(s, sid) { return s + classMap[cls].students[sid].completed; }, 0);
+    var avgComp   = stuArr.length > 0 ? (totalComp / stuArr.length) : 0;
+    var allDone   = stuArr.filter(function(sid) { return classMap[cls].students[sid].completed === reqTopics.length; }).length;
+    var students  = stuArr.map(function(sid) {
+      var v = classMap[cls].students[sid];
+      return { sid: sid, name: v.name, completed: v.completed, total: v.total, details: v.details };
+    }).sort(function(a, b) { return b.completed - a.completed; });
+    return { class: cls, studentCount: stuArr.length, avgCompleted: Math.round(avgComp * 10) / 10, allDoneCount: allDone, pct: reqTopics.length > 0 ? Math.round((avgComp / reqTopics.length) * 100) : 0, students: students };
+  }).sort(function(a, b) { return b.pct - a.pct || a.class.localeCompare(b.class, "zh-TW"); });
+
+  var result = { status: "ok", passScore: passScore, completionTopics: reqTopics, ranking: ranking };
+
+  // 快取只存班級摘要（不含 students）
+  var rankingForCache = ranking.map(function(r) {
+    return { class: r.class, studentCount: r.studentCount, avgCompleted: r.avgCompleted, allDoneCount: r.allDoneCount, pct: r.pct };
+  });
+  // ★ v9-4：改用 Script Properties 分班存放
+    setRankingCacheProps(passScore, reqTopics, ranking);
+
+  return jsonResponse(result);
+}
+
+// ── 排行快取工具函式 ──
+function getRankingCache(ss) {
+  var sheet = ss.getSheetByName(SHEET_RANKING_CACHE);
+  if (!sheet) return null;
+  try {
+    var vals  = sheet.getRange("A1:A2").getValues();
+    var valid = vals[0][0] ? vals[0][0].toString() : "";
+    var json  = vals[1][0] ? vals[1][0].toString() : "";
+    if (valid !== "VALID" || !json) return null;
+    var data = JSON.parse(json);
+    data.status = "ok";
+    return data;
+  } catch(e) { return null; }
+}
+
+function setRankingCache(ss, data) {
+  var sheet = ss.getSheetByName(SHEET_RANKING_CACHE);
+  if (!sheet) sheet = ss.insertSheet(SHEET_RANKING_CACHE);
+  sheet.getRange("A1:A2").setValues([["VALID"], [JSON.stringify(data)]]);
+  sheet.getRange("A1").setBackground("#dcfce7").setFontWeight("bold");
+}
+
+function invalidateRankingCache(ss) {
+  var sheet = ss.getSheetByName(SHEET_RANKING_CACHE);
+  if (sheet) sheet.getRange("A1").setValue("INVALID");
+  invalidateRankingCacheProps(); // ★ v9-4 同步失效 Script Properties 快取
+}
+
+// ─────────────────────────────────────────────
+// 【工具函式】強制重建排行快取
+// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────
+// 【工具函式】清空分類快取（GAS 編輯器執行）
+//   當分類顯示不完整時使用，重整頁面後自動重建
+// ─────────────────────────────────────────────
+function clearTopicCache() {
+  var ss    = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(SHEET_TOPIC_CACHE);
+  if (sheet) {
+    sheet.clearContents();
+    Logger.log("✅ 分類快取已清空，下次載入頁面會自動重建");
+  } else {
+    Logger.log("⚠️ 找不到分類快取 Sheet");
+  }
+}
+
+function forceRebuildRankingCache() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  invalidateRankingCache(ss);
+  Logger.log("已將快取標記為 INVALID");
+  var settings = readSettings(ss);
+  Logger.log("設定 - passScore: " + settings.passScore);
+  Logger.log("設定 - completionTopics: " + (settings.completionTopics || []).join(", "));
+  Logger.log("設定 - completionClasses: " + ((settings.completionClasses || []).join(", ") || "全部"));
+  handleGetCompletionRanking({});
+  var sheet = ss.getSheetByName(SHEET_RANKING_CACHE);
+  if (sheet) {
+    var a1 = sheet.getRange("A1").getValue() ? sheet.getRange("A1").getValue().toString() : "";
+    var a2 = sheet.getRange("A2").getValue() ? sheet.getRange("A2").getValue().toString() : "";
+    Logger.log("A1 狀態：" + a1);
+    Logger.log("A2 長度：" + a2.length + " 字元");
+    if (a2.length > 0) {
+      try {
+        var parsed = JSON.parse(a2);
+        Logger.log("✅ 快取重建成功，班級數：" + (parsed.ranking ? parsed.ranking.length : 0));
+      } catch(e) { Logger.log("❌ JSON 解析失敗：" + e.message); }
+    } else {
+      Logger.log("❌ A2 仍是空的，請先到後台設定完成度分類");
+    }
+  }
+}
+
+// ─────────────────────────────────────────────
+// Action 6：getTeacherData
+// ─────────────────────────────────────────────
+function handleGetTeacherData(payload) {
+  // ★ v9-4 輕量版：只讀題庫+學生名單+成績紀錄，不讀題目作答明細
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  // 從題庫建立對照表
+  var cogTypeMap     = {};
+  var correctTextMap = {};
+  var qSheet = ss.getSheetByName(SHEET_QUESTIONS);
+  if (qSheet && qSheet.getLastRow() > 1) {
+    var qRows    = qSheet.getDataRange().getValues();
+    var qHeaders = qRows[0].map(function(h) { return h.toString().trim(); });
+    var iId_t  = findColIdx(qHeaders, ["ID"]);
+    var iAns_t = findColIdx(qHeaders, ["正確答案","答案","answer","ans"]);
+    var iA_t   = findColIdx(qHeaders, ["選項A","選項1","optionA","a"]);
+    var iB_t   = findColIdx(qHeaders, ["選項B","選項2","optionB","b"]);
+    var iC_t   = findColIdx(qHeaders, ["選項C","選項3","optionC","c"]);
+    var iD_t   = findColIdx(qHeaders, ["選項D","選項4","optionD","d"]);
+    var COG_T  = 12;
+    for (var qi = 1; qi < qRows.length; qi++) {
+      var r_t = qRows[qi];
+      var qid_t = (iId_t !== -1 && r_t[iId_t]) ? r_t[iId_t].toString().trim() : "ROW_" + (qi + 1);
+      cogTypeMap[qid_t] = r_t[COG_T] ? r_t[COG_T].toString().trim() : "";
+      var rawAns_t = iAns_t !== -1 ? (r_t[iAns_t] ? r_t[iAns_t].toString().trim() : "") : "";
+      var opts_t   = [
+        iA_t !== -1 ? (r_t[iA_t] ? r_t[iA_t].toString().trim() : "") : "",
+        iB_t !== -1 ? (r_t[iB_t] ? r_t[iB_t].toString().trim() : "") : "",
+        iC_t !== -1 ? (r_t[iC_t] ? r_t[iC_t].toString().trim() : "") : "",
+        iD_t !== -1 ? (r_t[iD_t] ? r_t[iD_t].toString().trim() : "") : "",
+      ];
+      var ct = "";
+      var up_t = rawAns_t.toUpperCase();
+      if (["A","B","C","D"].indexOf(up_t) !== -1) ct = opts_t[up_t.charCodeAt(0) - 65] || "";
+      else if (["1","2","3","4"].indexOf(up_t) !== -1) ct = opts_t[parseInt(up_t) - 1] || "";
+      else {
+        var cl_t = rawAns_t.replace(/^([1-4]|[A-D])[.\-、\s]*/i,"").trim().toLowerCase();
+        for (var oi_t = 0; oi_t < opts_t.length; oi_t++) {
+          if (opts_t[oi_t].replace(/^([1-4]|[A-D])[.\-、\s]*/i,"").trim().toLowerCase() === cl_t) { ct = opts_t[oi_t]; break; }
+        }
+        if (!ct) ct = rawAns_t;
+      }
+      correctTextMap[qid_t] = ct;
+    }
+  }
+
+  var stuSheet = ss.getSheetByName(SHEET_STUDENTS);
+  var scoreSheet = ss.getSheetByName(SHEET_SCORES);
+  var studentInfoMap = {};
+  if (stuSheet && stuSheet.getLastRow() > 1) {
+    var sRows2 = stuSheet.getDataRange().getValues();
+    for (var si2 = 1; si2 < sRows2.length; si2++) {
+      var sid2 = sRows2[si2][0] ? sRows2[si2][0].toString().trim() : "";
+      if (sid2) studentInfoMap[sid2] = { name: sRows2[si2][1] ? sRows2[si2][1].toString().trim() : "", class: sRows2[si2][2] ? sRows2[si2][2].toString().trim() : "未分班" };
+    }
+  }
+
+  var studentHistory      = {};
+  var classStats          = {};
+
+  // ★ v9-4 班級統計改從成績紀錄計算（不讀題目作答明細）
+  if (scoreSheet && scoreSheet.getLastRow() > 1) {
+    var scRows2 = scoreSheet.getDataRange().getValues();
+    for (var i6 = 1; i6 < scRows2.length; i6++) {
+      var sid6    = scRows2[i6][1] ? scRows2[i6][1].toString() : "";
+      if (!sid6) continue;
+      var stuInfo6 = studentInfoMap[sid6] || {};
+      if (!studentHistory[sid6]) studentHistory[sid6] = { name: stuInfo6.name || sid6, class: stuInfo6.class || "未分班", attempts: [] };
+      studentHistory[sid6].attempts.push({
+        date:    scRows2[i6][0] ? scRows2[i6][0].toString() : "",
+        topic:   scRows2[i6][3] ? scRows2[i6][3].toString() : "",
+        mode:    scRows2[i6][4] ? scRows2[i6][4].toString() : "",
+        attempt: Number(scRows2[i6][5]),
+        score:   Number(scRows2[i6][6]),
+        correct: Number(scRows2[i6][7]),
+        wrong:   Number(scRows2[i6][8]),
+        isRetry: scRows2[i6][4] ? scRows2[i6][4].toString() === "錯題重做" : false,
+      });
+    }
+  }
+
+  // 從 studentHistory 計算 classList
+  Object.keys(studentHistory).forEach(function(sid) {
+    var cls = studentHistory[sid].class || "未分班";
+    if (!classStats[cls]) classStats[cls] = { correct: 0, total: 0, studentSet: {} };
+    classStats[cls].studentSet[sid] = true;
+    studentHistory[sid].attempts.forEach(function(a) {
+      if (!a.isRetry) {
+        classStats[cls].total  += (a.correct || 0) + (a.wrong || 0);
+        classStats[cls].correct += (a.correct || 0);
+      }
+    });
+  });
+
+  var classList2 = Object.keys(classStats).map(function(cls) {
+    var s = classStats[cls];
+    return { class: cls, correct: s.correct, total: s.total,
+      rate: s.total > 0 ? Math.round((s.correct / s.total) * 100) : null,
+      studentCount: Object.keys(s.studentSet).length };
+  }).sort(function(a,b) { return a.class.localeCompare(b.class, "zh-TW"); });
+
+  return jsonResponse({ status: "ok", studentHistory: studentHistory, classList: classList2, studentInfoMap: studentInfoMap });
+}
+
+// ─────────────────────────────────────────────
+// 工具函式
+// ─────────────────────────────────────────────
+function readSettings(ss) {
+  var sheet = ss.getSheetByName(SHEET_SETTINGS);
+  var defaults = { passScore: 80, completionTopics: [], completionClasses: [] };
+  if (!sheet || sheet.getLastRow() < 2) return defaults;
+  var rows = sheet.getDataRange().getValues();
+  var map  = {};
+  for (var i = 1; i < rows.length; i++) {
+    var key = rows[i][0] ? rows[i][0].toString().trim() : "";
+    var val = rows[i][1] ? rows[i][1].toString().trim() : "";
+    if (key) map[key] = val;
+  }
+  return {
+    passScore:         parseInt(map["completion_pass_score"] || "80"),
+    completionTopics:  map["completion_topics"]  ? map["completion_topics"].split(",").map(function(s) { return s.trim(); }).filter(Boolean) : [],
+    completionClasses: map["completion_classes"] ? map["completion_classes"].split(",").map(function(s) { return s.trim(); }).filter(Boolean) : [],
+    deadline:          map["deadline"] || "",
+  };
+}
+
+function writeSettings(ss, passScore, completionTopics, completionClasses) {
+  var sheet = ss.getSheetByName(SHEET_SETTINGS);
+  if (!sheet) {
+    sheet = ss.insertSheet(SHEET_SETTINGS);
+    sheet.appendRow(["設定名稱", "值"]);
+    sheet.getRange(1,1,1,2).setFontWeight("bold").setBackground("#f3e8ff");
+  }
+  var rows   = sheet.getLastRow() > 1 ? sheet.getRange(2, 1, sheet.getLastRow()-1, 2).getValues() : [];
+  var keyMap = {};
+  rows.forEach(function(r, i) { if (r[0]) keyMap[r[0].toString().trim()] = i + 2; });
+  function upsert(key, val) {
+    if (keyMap[key]) sheet.getRange(keyMap[key], 2).setValue(val);
+    else sheet.appendRow([key, val]);
+  }
+  upsert("completion_pass_score", passScore);
+  upsert("completion_topics",     completionTopics.join(","));
+  upsert("completion_classes",    completionClasses.join(","));
+}
+
+function localNow() {
+  var now = new Date();
+  var tw  = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+  function pad(n) { return String(n).padStart(2, "0"); }
+  return tw.getUTCFullYear() + "/" + pad(tw.getUTCMonth()+1) + "/" + pad(tw.getUTCDate()) + " " + pad(tw.getUTCHours()) + ":" + pad(tw.getUTCMinutes()) + ":" + pad(tw.getUTCSeconds());
+}
+
+function hashString(str) {
+  var hash = 2166136261;
+  for (var i = 0; i < str.length; i++) {
+    hash ^= str.charCodeAt(i);
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
+}
+
+function findColIdx(headers, names) {
+  for (var ni = 0; ni < names.length; ni++) {
+    for (var hi = 0; hi < headers.length; hi++) {
+      if (headers[hi] === names[ni] || headers[hi].toLowerCase() === names[ni].toLowerCase()) return hi;
+    }
+  }
+  return -1;
+}
+
+function jsonResponse(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+}
+
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  ★ v9-3 新增功能                                            ║
+// ╚══════════════════════════════════════════════════════════════╝
+
+// ─────────────────────────────────────────────
+// 核心計算函式：讀取所有成績，計算每位學生每個分類最高分
+// 同時計算班級排行，一次計算兩用
+// ─────────────────────────────────────────────
+function calcStudentTopicScores(ss) {
+  var settings   = readSettings(ss);
+  var passScore  = settings.passScore;
+  var reqTopics  = settings.completionTopics;
+  var reqClasses = settings.completionClasses || [];
+
+  var scoreSheet = ss.getSheetByName(SHEET_SCORES);
+  var stuSheet   = ss.getSheetByName(SHEET_STUDENTS);
+
+  // 學號 → { name, class }
+  var studentInfoMap = {};
+  if (stuSheet && stuSheet.getLastRow() > 1) {
+    var stRows = stuSheet.getDataRange().getValues();
+    for (var si = 1; si < stRows.length; si++) {
+      var sid = stRows[si][0] ? stRows[si][0].toString().trim() : "";
+      if (sid) studentInfoMap[sid] = {
+        name:  stRows[si][1] ? stRows[si][1].toString().trim() : "",
+        class: stRows[si][2] ? stRows[si][2].toString().trim() : "未分班"
+      };
+    }
+  }
+
+  // 學號 → 分類 → 最高分
+  var studentTopicBest = {};
+  if (scoreSheet && scoreSheet.getLastRow() > 1) {
+    var scRows = scoreSheet.getDataRange().getValues();
+    for (var i = 1; i < scRows.length; i++) {
+      var sid2   = scRows[i][1] ? scRows[i][1].toString().trim() : "";
+      var topic2 = scRows[i][3] ? scRows[i][3].toString().trim() : "";
+      var mode2  = scRows[i][4] ? scRows[i][4].toString().trim() : "";
+      var score2 = Number(scRows[i][6]);
+      if (!sid2 || mode2 === "錯題重做") continue;
+      if (!studentTopicBest[sid2]) studentTopicBest[sid2] = {};
+      if (score2 > (studentTopicBest[sid2][topic2] || 0)) studentTopicBest[sid2][topic2] = score2;
+    }
+  }
+
+  return {
+    settings:          settings,
+    passScore:         passScore,
+    reqTopics:         reqTopics,
+    reqClasses:        reqClasses,
+    studentInfoMap:    studentInfoMap,
+    studentTopicBest:  studentTopicBest,
+  };
+}
+
+// ─────────────────────────────────────────────
+// 更新學生成績總表 + 排行快取（合併計算）
+// ─────────────────────────────────────────────
+function buildAndSaveScoreTable(ss) {
+  var data = calcStudentTopicScores(ss);
+  var settings         = data.settings;
+  var passScore        = data.passScore;
+  var reqTopics        = data.reqTopics;
+  var reqClasses       = data.reqClasses;
+  var studentInfoMap   = data.studentInfoMap;
+  var studentTopicBest = data.studentTopicBest;
+
+  // ── 取得所有分類清單（從題庫）──
+  var qSheet = ss.getSheetByName(SHEET_QUESTIONS);
+  var allTopics = [];
+  if (qSheet && qSheet.getLastRow() > 1) {
+    var qRows    = qSheet.getDataRange().getValues();
+    var qHeaders = qRows[0].map(function(h) { return h.toString().trim(); });
+    var iTop = findColIdx(qHeaders, ["分類","category"]);
+    var topicSet = {}, topicOrder = [];
+    for (var qi = 1; qi < qRows.length; qi++) {
+      var t = iTop !== -1 ? (qRows[qi][iTop] ? qRows[qi][iTop].toString().trim() : "") : "";
+      if (t && !topicSet[t]) { topicSet[t] = true; topicOrder.push(t); }
+    }
+    allTopics = topicOrder;
+  }
+
+  // ── 寫入學生成績總表 ──
+  var tableSheet = ss.getSheetByName(SHEET_SCORE_TABLE);
+  if (!tableSheet) {
+    tableSheet = ss.insertSheet(SHEET_SCORE_TABLE);
+  }
+  tableSheet.clearContents();
+
+  // 標題列
+  var header = ["班級","學號","姓名"].concat(allTopics).concat(["完成度","最後更新"]);
+  tableSheet.getRange(1, 1, 1, header.length).setValues([header]);
+  tableSheet.getRange(1, 1, 1, header.length).setFontWeight("bold").setBackground("#e0e7ff");
+  tableSheet.setFrozenRows(1);
+  tableSheet.setFrozenColumns(3);
+
+  // 學生資料列（依班級→學號排序）
+  var sids = Object.keys(studentInfoMap).sort(function(a, b) {
+    var ca = studentInfoMap[a].class, cb = studentInfoMap[b].class;
+    if (ca !== cb) return ca.localeCompare(cb, "zh-TW");
+    return a.localeCompare(b);
+  });
+
+  var now = localNow();
+  var rows = [];
+  sids.forEach(function(sid) {
+    var info      = studentInfoMap[sid];
+    var topicBest = studentTopicBest[sid] || {};
+    var scores    = allTopics.map(function(t) { return topicBest[t] !== undefined ? topicBest[t] : ""; });
+    var completed = reqTopics.length > 0
+      ? reqTopics.filter(function(t) { return (topicBest[t] || 0) >= passScore; }).length
+      : "";
+    var compText  = reqTopics.length > 0 ? (completed + "/" + reqTopics.length) : "";
+    rows.push([info.class, sid, info.name].concat(scores).concat([compText, now]));
+  });
+
+  if (rows.length > 0) {
+    tableSheet.getRange(2, 1, rows.length, header.length).setValues(rows);
+  }
+
+  // ── 同時更新排行快取 ──
+  if (reqTopics.length > 0) {
+    var classMap = {};
+    sids.forEach(function(sid) {
+      var info  = studentInfoMap[sid];
+      var cls   = info.class;
+      if (reqClasses.length > 0 && reqClasses.indexOf(cls) === -1) return;
+      if (!classMap[cls]) classMap[cls] = { students: {} };
+      var topicBest = studentTopicBest[sid] || {};
+      var completed = reqTopics.filter(function(t) { return (topicBest[t] || 0) >= passScore; }).length;
+      var details   = reqTopics.map(function(t) {
+        return { topic: t, best: topicBest[t] || null, passed: (topicBest[t] || 0) >= passScore };
+      });
+      classMap[cls].students[sid] = { name: info.name, completed: completed, total: reqTopics.length, details: details };
+    });
+
+    var ranking = Object.keys(classMap).map(function(cls) {
+      var stuArr    = Object.keys(classMap[cls].students);
+      var totalComp = stuArr.reduce(function(s, sid) { return s + classMap[cls].students[sid].completed; }, 0);
+      var avgComp   = stuArr.length > 0 ? (totalComp / stuArr.length) : 0;
+      var allDone   = stuArr.filter(function(sid) { return classMap[cls].students[sid].completed === reqTopics.length; }).length;
+      var students  = stuArr.map(function(sid) {
+        var v = classMap[cls].students[sid];
+        return { sid: sid, name: v.name, completed: v.completed, total: v.total, details: v.details };
+      }).sort(function(a, b) { return b.completed - a.completed; });
+      return {
+        class: cls, studentCount: stuArr.length,
+        avgCompleted: Math.round(avgComp * 10) / 10,
+        allDoneCount: allDone,
+        pct: reqTopics.length > 0 ? Math.round((avgComp / reqTopics.length) * 100) : 0,
+        students: students
+      };
+    }).sort(function(a, b) { return b.pct - a.pct || a.class.localeCompare(b.class, "zh-TW"); });
+
+    var rankingForCache = ranking.map(function(r) {
+      return { class: r.class, studentCount: r.studentCount, avgCompleted: r.avgCompleted, allDoneCount: r.allDoneCount, pct: r.pct };
+    });
+    // ★ v9-4：改用 Script Properties 分班存放
+    setRankingCacheProps(passScore, reqTopics, ranking);
+    Logger.log("✅ 排行快取已更新，班級數：" + ranking.length);
+  }
+
+  Logger.log("✅ 學生成績總表已更新，共 " + rows.length + " 位學生，" + allTopics.length + " 個分類");
+  return rows.length;
+}
+
+// ─────────────────────────────────────────────
+// 【定時觸發】每小時自動執行
+//   沒有新作答時跳過，不更新
+//   在 GAS 觸發器設定：函式=autoUpdateScoreSheet，每小時
+// ─────────────────────────────────────────────
+function autoUpdateScoreSheet() {
+  var ss          = SpreadsheetApp.getActiveSpreadsheet();
+  var scoreSheet  = ss.getSheetByName(SHEET_SCORES);
+
+  if (!scoreSheet || scoreSheet.getLastRow() <= 1) {
+    Logger.log("⏭ 成績紀錄是空的，跳過更新");
+    return;
+  }
+
+  // 檢查最後一筆成績的時間
+  var lastRow      = scoreSheet.getLastRow();
+  var lastTimeVal  = scoreSheet.getRange(lastRow, 1).getValue();
+  var lastTime     = lastTimeVal instanceof Date ? lastTimeVal : new Date(lastTimeVal);
+
+  if (isNaN(lastTime)) {
+    Logger.log("⏭ 無法讀取最後作答時間，跳過");
+    return;
+  }
+
+  // 距現在超過 2 小時沒有新作答 → 跳過
+  var diffHours = (new Date().getTime() - lastTime.getTime()) / (1000 * 60 * 60);
+  if (diffHours > 2) {
+    Logger.log("⏭ 距上次作答 " + diffHours.toFixed(1) + " 小時，無新作答，跳過更新");
+    return;
+  }
+
+  Logger.log("⏱ 距上次作答 " + diffHours.toFixed(1) + " 小時，開始更新...");
+  buildAndSaveScoreTable(ss);
+}
+
+// ─────────────────────────────────────────────
+// Action：getStudentScoreTable（手動立即更新）
+// ─────────────────────────────────────────────
+function handleGetStudentScoreTable(payload) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var count = buildAndSaveScoreTable(ss);
+  return jsonResponse({ status: "ok", message: "✅ 學生成績總表已更新，共 " + count + " 位學生", count: count });
+}
+
+// ─────────────────────────────────────────────
+// 【工具函式】手動立即更新（GAS 編輯器執行）
+// ─────────────────────────────────────────────
+function manualUpdateScoreTable() {
+  var ss    = SpreadsheetApp.getActiveSpreadsheet();
+  var count = buildAndSaveScoreTable(ss);
+  Logger.log("✅ 完成！共 " + count + " 位學生");
+}
+
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  ★ v9-4 新增功能                                            ║
+// ╚══════════════════════════════════════════════════════════════╝
+
+// ─────────────────────────────────────────────
+// 登入狀態 Sheet 工具
+// 欄位：A=學號 B=姓名 C=token D=登入時間 E=IP F=裝置 G=瀏覽器 H=狀態
+// ─────────────────────────────────────────────
+function getOrCreateLoginStateSheet(ss) {
+  var sheet = ss.getSheetByName(SHEET_LOGIN_STATE);
+  if (!sheet) {
+    sheet = ss.insertSheet(SHEET_LOGIN_STATE);
+    sheet.appendRow(["學號","姓名","token","登入時間","IP","裝置","瀏覽器","狀態"]);
+    sheet.getRange(1,1,1,8).setFontWeight("bold").setBackground("#e0e7ff");
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
+}
+
+// ─────────────────────────────────────────────
+// 產生 Token
+// ─────────────────────────────────────────────
+function generateToken(studentId) {
+  var now   = new Date().getTime().toString(36);
+  var rand  = Math.random().toString(36).slice(2, 8);
+  return studentId + "_" + now + "_" + rand;
+}
+
+// ─────────────────────────────────────────────
+// Action：loginStudent
+//   學生登入時呼叫，產生 token，記錄 IP/裝置/瀏覽器
+//   若同帳號已有 active token → 標記為 kicked（即時踢出）
+// ─────────────────────────────────────────────
+function handleLoginStudent(payload) {
+  var studentId = payload.studentId ? payload.studentId.toString().trim() : "";
+  var name      = payload.name      ? payload.name.toString().trim()      : "";
+  var ip        = payload.ip        ? payload.ip.toString()               : "未知";
+  var device    = payload.device    ? payload.device.toString()           : "未知";
+  var browser   = payload.browser   ? payload.browser.toString()         : "未知";
+
+  if (!studentId || !name) return jsonResponse({ status: "error", message: "學號或姓名不得為空" });
+
+  var ss    = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = getOrCreateLoginStateSheet(ss);
+
+  // 找出同學號的所有 active 記錄 → 標記為 kicked
+  var lastRow = sheet.getLastRow();
+  if (lastRow > 1) {
+    var data = sheet.getRange(2, 1, lastRow - 1, 8).getValues();
+    for (var i = 0; i < data.length; i++) {
+      if (data[i][0].toString() === studentId && data[i][7].toString() === "active") {
+        sheet.getRange(i + 2, 8).setValue("kicked");
+      }
+    }
+  }
+
+  // 產生新 token 並寫入
+  var token = generateToken(studentId);
+  sheet.appendRow([studentId, name, token, localNow(), ip, device, browser, "active"]);
+
+  return jsonResponse({ status: "ok", token: token });
+}
+
+// ─────────────────────────────────────────────
+// Action：verifySession
+//   前端每 30 秒呼叫一次，驗證 token 是否仍有效
+//   回傳 { valid: true } 或 { valid: false, reason: "kicked" }
+// ─────────────────────────────────────────────
+function handleVerifySession(payload) {
+  var studentId = payload.studentId ? payload.studentId.toString().trim() : "";
+  var token     = payload.token     ? payload.token.toString().trim()     : "";
+
+  if (!studentId || !token) return jsonResponse({ valid: false, reason: "missing" });
+
+  var ss    = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(SHEET_LOGIN_STATE);
+  if (!sheet || sheet.getLastRow() <= 1) return jsonResponse({ valid: false, reason: "no_data" });
+
+  var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 8).getValues();
+
+  // 從最新往舊找（最後登入的優先）
+  for (var i = data.length - 1; i >= 0; i--) {
+    var row = data[i];
+    if (row[0].toString() !== studentId) continue;
+    if (row[2].toString() !== token)     continue;
+
+    var status = row[7].toString();
+    if (status === "active")  return jsonResponse({ valid: true });
+    if (status === "kicked")  return jsonResponse({ valid: false, reason: "kicked" });
+    return jsonResponse({ valid: false, reason: "invalid" });
+  }
+
+  return jsonResponse({ valid: false, reason: "not_found" });
+}
+
+// ─────────────────────────────────────────────
+// ★ v9-4：排行快取改用 Script Properties 分班存
+//   RANKING_VALID    = "true" / "false"
+//   RANKING_SUMMARY  = 班級摘要 JSON（首頁排行）
+//   RANKING_CLASS_護516 = 該班完整 students JSON
+// ─────────────────────────────────────────────
+function getRankingCacheProps(ss) {
+  var props = PropertiesService.getScriptProperties();
+  try {
+    var valid = props.getProperty("RANKING_VALID");
+    if (valid !== "true") return null;
+    var summaryJson = props.getProperty("RANKING_SUMMARY");
+    if (!summaryJson) return null;
+    var summary = JSON.parse(summaryJson);
+    // 回傳摘要版本（不含 students），點班級時再讀各班
+    return { status: "ok", passScore: summary.passScore, completionTopics: summary.completionTopics, ranking: summary.ranking };
+  } catch(e) { return null; }
+}
+
+function getClassStudentsCacheProps(className) {
+  var props = PropertiesService.getScriptProperties();
+  try {
+    var key  = "RANKING_CLASS_" + className;
+    var json = props.getProperty(key);
+    if (!json) return null;
+    return JSON.parse(json);
+  } catch(e) { return null; }
+}
+
+function setRankingCacheProps(passScore, completionTopics, ranking) {
+  var props = PropertiesService.getScriptProperties();
+  try {
+    // 存班級摘要（不含 students）
+    var rankingSummary = ranking.map(function(r) {
+      return { class: r.class, studentCount: r.studentCount, avgCompleted: r.avgCompleted, allDoneCount: r.allDoneCount, pct: r.pct };
+    });
+    props.setProperty("RANKING_SUMMARY", JSON.stringify({ passScore: passScore, completionTopics: completionTopics, ranking: rankingSummary }));
+
+    // 分班存完整 students 資料
+    ranking.forEach(function(r) {
+      var key = "RANKING_CLASS_" + r.class;
+      props.setProperty(key, JSON.stringify(r.students || []));
+    });
+
+    props.setProperty("RANKING_VALID", "true");
+    Logger.log("✅ 排行快取已存入 Script Properties，班級數：" + ranking.length);
+  } catch(e) {
+    Logger.log("⚠️ Script Properties 寫入失敗：" + e.message);
+  }
+}
+
+function invalidateRankingCacheProps() {
+  var props = PropertiesService.getScriptProperties();
+  props.setProperty("RANKING_VALID", "false");
+}
+
+// ─────────────────────────────────────────────
+// 新增 Action：getClassStudents
+//   前端點班級時呼叫，取得該班完整學生資料
+// ─────────────────────────────────────────────
+// 路由已在 doPost 加入（需再補）
+
+function handleGetClassStudents(payload) {
+  var className = payload.className ? payload.className.toString() : "";
+  if (!className) return jsonResponse({ status: "error", message: "缺少 className" });
+
+  // 先從 Script Properties 快取取
+  var cached = getClassStudentsCacheProps(className);
+  if (cached) return jsonResponse({ status: "ok", students: cached, fromCache: true });
+
+  // 快取不存在 → 即時計算
+  var ss   = SpreadsheetApp.getActiveSpreadsheet();
+  var data = calcStudentTopicScores(ss);
+  var students = [];
+  Object.keys(data.studentInfoMap).forEach(function(sid) {
+    var info = data.studentInfoMap[sid];
+    if (info.class !== className) return;
+    var topicBest = data.studentTopicBest[sid] || {};
+    var completed = data.reqTopics.filter(function(t) { return (topicBest[t] || 0) >= data.passScore; }).length;
+    var details   = data.reqTopics.map(function(t) {
+      return { topic: t, best: topicBest[t] || null, passed: (topicBest[t] || 0) >= data.passScore };
+    });
+    students.push({ sid: sid, name: info.name, completed: completed, total: data.reqTopics.length, details: details });
+  });
+  students.sort(function(a, b) { return b.completed - a.completed; });
+  return jsonResponse({ status: "ok", students: students, fromCache: false });
+}
+
+// ─────────────────────────────────────────────
+// ★ v9-4 handleGetDetailStats（重量版，懶載入）
+//   只有前端點「題目難度分析」或「單元統計」時才呼叫
+//   讀：題庫 + 題目作答明細（所有分頁）
+//   回傳：questionStats、topicStats、studentWrongDetails
+// ─────────────────────────────────────────────
+function handleGetDetailStats(payload) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  // 從題庫建立對照表
+  var cogTypeMap     = {};
+  var correctTextMap = {};
+  var qSheet = ss.getSheetByName(SHEET_QUESTIONS);
+  if (qSheet && qSheet.getLastRow() > 1) {
+    var qRows    = qSheet.getDataRange().getValues();
+    var qHeaders = qRows[0].map(function(h) { return h.toString().trim(); });
+    var iId_t  = findColIdx(qHeaders, ["ID"]);
+    var iAns_t = findColIdx(qHeaders, ["正確答案","答案","answer","ans"]);
+    var iA_t   = findColIdx(qHeaders, ["選項A","選項1","optionA","a"]);
+    var iB_t   = findColIdx(qHeaders, ["選項B","選項2","optionB","b"]);
+    var iC_t   = findColIdx(qHeaders, ["選項C","選項3","optionC","c"]);
+    var iD_t   = findColIdx(qHeaders, ["選項D","選項4","optionD","d"]);
+    var COG_T  = 12;
+    for (var qi = 1; qi < qRows.length; qi++) {
+      var r_t   = qRows[qi];
+      var qid_t = (iId_t !== -1 && r_t[iId_t]) ? r_t[iId_t].toString().trim() : "ROW_" + (qi + 1);
+      cogTypeMap[qid_t] = r_t[COG_T] ? r_t[COG_T].toString().trim() : "";
+      var rawAns_t = iAns_t !== -1 ? (r_t[iAns_t] ? r_t[iAns_t].toString().trim() : "") : "";
+      var opts_t   = [
+        iA_t !== -1 ? (r_t[iA_t] ? r_t[iA_t].toString().trim() : "") : "",
+        iB_t !== -1 ? (r_t[iB_t] ? r_t[iB_t].toString().trim() : "") : "",
+        iC_t !== -1 ? (r_t[iC_t] ? r_t[iC_t].toString().trim() : "") : "",
+        iD_t !== -1 ? (r_t[iD_t] ? r_t[iD_t].toString().trim() : "") : "",
+      ];
+      var ct = "", up_t = rawAns_t.toUpperCase();
+      if (["A","B","C","D"].indexOf(up_t) !== -1) ct = opts_t[up_t.charCodeAt(0) - 65] || "";
+      else if (["1","2","3","4"].indexOf(up_t) !== -1) ct = opts_t[parseInt(up_t) - 1] || "";
+      else {
+        var cl_t = rawAns_t.replace(/^([1-4]|[A-D])[.\-、\s]*/i,"").trim().toLowerCase();
+        for (var oi_t = 0; oi_t < opts_t.length; oi_t++) {
+          if (opts_t[oi_t].replace(/^([1-4]|[A-D])[.\-、\s]*/i,"").trim().toLowerCase() === cl_t) { ct = opts_t[oi_t]; break; }
+        }
+        if (!ct) ct = rawAns_t;
+      }
+      correctTextMap[qid_t] = ct;
+    }
+  }
+
+  // 讀題目作答明細（所有分頁）
+  var questionStats       = {};
+  var topicStats          = {};
+  var studentWrongDetails = {};
+
+  var allSheets = ss.getSheets();
+  var detailSheets = allSheets.filter(function(s) {
+    return s.getName() === SHEET_DETAILS || s.getName().indexOf(SHEET_DETAILS + "_") === 0;
+  }).sort(function(a,b) { return a.getName().localeCompare(b.getName()); });
+
+  for (var di = 0; di < detailSheets.length; di++) {
+    var dSheet = detailSheets[di];
+    if (dSheet.getLastRow() <= 1) continue;
+    var dRows = dSheet.getDataRange().getValues();
+    for (var i = 1; i < dRows.length; i++) {
+      var sid     = dRows[i][1] ? dRows[i][1].toString() : "";
+      var qid     = dRows[i][3] ? dRows[i][3].toString() : "";
+      var qtext   = dRows[i][4] ? dRows[i][4].toString() : "";
+      var topic   = dRows[i][5] ? dRows[i][5].toString() : "未分類";
+      var selOpt  = dRows[i][6] ? dRows[i][6].toString() : "未作答";
+      var corrOpt = dRows[i][7] ? dRows[i][7].toString() : "";
+      var result  = dRows[i][8] ? dRows[i][8].toString() : "";
+      if (!sid || !qid) continue;
+      var isCorrect = result === "答對";
+
+      if (!questionStats[qid]) {
+        questionStats[qid] = { text: qtext, topic: topic, correct: 0, total: 0, optionCounts: {}, correctText: correctTextMap[qid] || corrOpt, cogType: cogTypeMap[qid] || "" };
+      }
+      if (correctTextMap[qid]) questionStats[qid].correctText = correctTextMap[qid];
+      questionStats[qid].total++;
+      if (isCorrect) questionStats[qid].correct++;
+      if (selOpt && selOpt !== "未作答") {
+        questionStats[qid].optionCounts[selOpt] = (questionStats[qid].optionCounts[selOpt] || 0) + 1;
+      }
+
+      if (!topicStats[topic]) topicStats[topic] = { correct: 0, total: 0 };
+      topicStats[topic].total++;
+      if (isCorrect) topicStats[topic].correct++;
+
+      if (!isCorrect) {
+        if (!studentWrongDetails[sid]) studentWrongDetails[sid] = {};
+        studentWrongDetails[sid][qid] = { qid: qid, qtext: qtext, topic: topic, selectedText: selOpt, correctText: corrOpt };
+      } else {
+        if (studentWrongDetails[sid]) delete studentWrongDetails[sid][qid];
+      }
+    }
+  }
+
+  // 補入題庫中尚無作答的新題目
+  if (qSheet && qSheet.getLastRow() > 1) {
+    var qRowsFull = qSheet.getDataRange().getValues();
+    var qHdrFull  = qRowsFull[0].map(function(h) { return h.toString().trim(); });
+    var iId_f  = findColIdx(qHdrFull, ["ID"]);
+    var iTop_f = findColIdx(qHdrFull, ["分類","category"]);
+    var iQ_f   = findColIdx(qHdrFull, ["題目","question","q"]);
+    for (var qfi = 1; qfi < qRowsFull.length; qfi++) {
+      var r_f   = qRowsFull[qfi];
+      var qid_f = (iId_f !== -1 && r_f[iId_f]) ? r_f[iId_f].toString().trim() : "ROW_" + (qfi + 1);
+      var qt_f  = iQ_f   !== -1 ? (r_f[iQ_f]   ? r_f[iQ_f].toString().trim()   : "") : "";
+      var top_f = iTop_f !== -1 ? (r_f[iTop_f]  ? r_f[iTop_f].toString().trim() : "未分類") : "未分類";
+      if (!qt_f) continue;
+      if (!questionStats[qid_f]) {
+        questionStats[qid_f] = { text: qt_f, topic: top_f, correct: 0, total: 0, optionCounts: {}, correctText: correctTextMap[qid_f] || "", cogType: cogTypeMap[qid_f] || "" };
+      } else {
+        if (!questionStats[qid_f].text || questionStats[qid_f].text === qid_f) {
+          questionStats[qid_f].text  = qt_f;
+          questionStats[qid_f].topic = top_f;
+        }
+      }
+    }
+  }
+
+  var questionList = Object.keys(questionStats).map(function(id) {
+    var s = questionStats[id];
+    return { id: id, text: s.text, topic: s.topic, correct: s.correct, total: s.total,
+      rate: s.total > 0 ? Math.round((s.correct / s.total) * 100) : null,
+      optionCounts: s.optionCounts, correctText: s.correctText || "", cogType: s.cogType || "" };
+  }).sort(function(a,b) {
+    if (a.topic < b.topic) return -1;
+    if (a.topic > b.topic) return 1;
+    return (a.rate !== null ? a.rate : 100) - (b.rate !== null ? b.rate : 100);
+  });
+
+  var topicList = Object.keys(topicStats).map(function(t) {
+    var s = topicStats[t];
+    return { topic: t, correct: s.correct, total: s.total, rate: s.total > 0 ? Math.round((s.correct / s.total) * 100) : null };
+  });
+
+  var wrongFmt = {};
+  Object.keys(studentWrongDetails).forEach(function(sid) {
+    wrongFmt[sid] = Object.keys(studentWrongDetails[sid]).map(function(qid) { return studentWrongDetails[sid][qid]; });
+  });
+
+  return jsonResponse({ status: "ok", questionStats: questionList, topicStats: topicList, studentWrongDetails: wrongFmt });
+}
+
+// ─────────────────────────────────────────────
+// 【工具函式】checkDataStatus（GAS 編輯器執行）
+//   確認各 Sheet 目前資料狀況
+// ─────────────────────────────────────────────
+function checkDataStatus() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  Logger.log("Sheet 名稱：" + ss.getName());
+  Logger.log("Sheet ID："   + ss.getId());
+
+  var sheets = [
+    SHEET_QUESTIONS, SHEET_SCORES, SHEET_DETAILS,
+    SHEET_STUDENTS,  SHEET_WRONG_IDX, SHEET_SCORE_TABLE,
+    SHEET_LOGIN_STATE, SHEET_SETTINGS
+  ];
+  sheets.forEach(function(name) {
+    var s = ss.getSheetByName(name);
+    Logger.log((s ? "✅ " : "❌ ") + name + "：" + (s ? (s.getLastRow()-1) + " 筆" : "不存在"));
+  });
+
+  // 封存明細分頁
+  var allSheets = ss.getSheets();
+  var archived  = allSheets.filter(function(s) {
+    return s.getName().indexOf(SHEET_DETAILS + "_") === 0;
+  });
+  if (archived.length) {
+    Logger.log("封存明細分頁：" + archived.length + " 個");
+    archived.forEach(function(s) { Logger.log("  - " + s.getName() + "（" + (s.getLastRow()-1) + " 列）"); });
+  }
+
+  // Script Properties 排行快取
+  var props  = PropertiesService.getScriptProperties();
+  var valid  = props.getProperty("RANKING_VALID") || "無";
+  var sumLen = (props.getProperty("RANKING_SUMMARY") || "").length;
+  Logger.log("排行快取 VALID：" + valid + "，SUMMARY 長度：" + sumLen);
+}';
 
 // ★ v1.4 Session Token + 即時踢出
 let sessionToken   = "";
@@ -818,6 +2585,8 @@ let completionSettings = { passScore: 80, completionTopics: [], completionClasse
 let allClassList       = [];   // ★ 所有班級清單（後台設定用）
 let studentName        = "";
 let studentId          = "";
+let isLoggedIn         = false;  // ★ v1.5 登入狀態旗標
+let quizStartTime      = 0;       // ★ v1.6 測驗開始時間
 let currentSelectedTopic = "";
 let quizSession        = [];   // 當前測驗題目（含學生作答）
 let currentQuestionIndex = 0;
@@ -922,16 +2691,16 @@ function handleLogin() {
 
     // 驗證通過，直接進入
     errEl.classList.add("hidden");
+    isLoggedIn  = true;  // ★ 設定登入狀態
     studentId   = idVal;
     studentName = nameVal;
     document.getElementById("display-user-name").textContent = studentName;
     // ★ v1.4 取得 token（非同步，不阻塞登入流程）
     loginWithToken(studentId, studentName);
     hide("login-section");
-    renderTopics();
-    show("topic-section");
-    // ★ 登入後隱藏班級排行，只顯示個人完成度
     hide("ranking-section");
+    try { renderTopics(); } catch(e) { console.warn("renderTopics 錯誤", e); }
+    show("topic-section");
     if (completionSettings.completionTopics?.length > 0) {
         loadMyCompletion();
     }
@@ -942,7 +2711,23 @@ function handleLogin() {
 // ══════════════════════════════════════════════
 function renderTopics() {
     const div = document.getElementById("topic-list");
+    if (!div) { console.error("❌ topic-list 元素不存在"); return; }
     div.innerHTML = "";
+
+    console.log("📚 renderTopics 呼叫，topicsData 長度：", topicsData?.length,
+                "，completionTopics 長度：", completionSettings?.completionTopics?.length);
+
+    // ★ v1.5 fallback：topicsData 空時用 completionTopics 補入（顯示但無顏色）
+    if (!topicsData || topicsData.length === 0) {
+        const fallbackTopics = completionSettings?.completionTopics || [];
+        console.warn("⚠️ topicsData 空，使用 fallback，分類數：", fallbackTopics.length);
+        if (fallbackTopics.length > 0) {
+            topicsData = fallbackTopics.map(name => ({ name, color: "#0ea5e9" }));
+        } else {
+            div.innerHTML = '<p class="text-gray-400 text-center py-8 text-sm">📭 尚無分類資料，請重新整理頁面</p>';
+            return;
+        }
+    }
 
     // 色彩工具
     const hexToRgba = (hex, alpha) => {
@@ -965,20 +2750,21 @@ function renderTopics() {
         return "#ef4444";
     };
 
-    // 取得各分類完成度資訊
+    // 取得各分類完成度資訊（含平均每題用時）
     const compMap = {};
     if (window._completionDetails) {
         window._completionDetails.forEach(d => {
-            compMap[d.topic] = { best: d.best, passed: d.passed };
+            compMap[d.topic] = { best: d.best, passed: d.passed, avgSec: d.avgSec || null };
         });
     }
 
     // 分類列表（列式，每列含測驗+閃卡+最高分）
-    topicsData.forEach(({ name: topic, color }) => {
+    console.log("📋 開始渲染", topicsData.length, "個分類");
+    topicsData.forEach(({ name: topic, color }, idx) => {
+        try {
         const hex   = getColor(color);
         const comp  = compMap[topic];
         const row   = document.createElement("div");
-        row.style.cssText = `border:1.5px solid ${hexToRgba(hex, 0.3)};border-radius:12px;overflow:hidden;background:white;`;
 
         // 分數標籤 HTML
         let scoreBadge = "";
@@ -993,10 +2779,26 @@ function renderTopics() {
                 scoreBadge = `<span style="color:#94a3b8;font-size:11px;">未作答</span>`;
             }
         }
+        // ★ v1.6 平均每題用時標籤
+        const avgSec = comp?.avgSec;
+        const timeLabel = avgSec != null
+            ? `<span style="font-size:10px;color:#64748b;margin-left:4px;">⏱ 均${avgSec}秒/題</span>`
+            : "";
+
+        // ★ 方案 C：未達標加閃卡提示文字（needsReview 必須在 borderColor 之前定義）
+        const needsReview = comp && !comp.passed && comp.best !== null;
+        const fcHint = needsReview
+            ? `<div style="font-size:10px;color:#dc2626;margin-top:3px;font-weight:600;">💡 建議閃卡複習</div>`
+            : "";
+        const borderColor = needsReview ? "rgba(239,68,68,0.35)" : hexToRgba(hex, 0.3);
+        row.style.cssText = `border:1.5px solid ${borderColor};border-radius:12px;overflow:hidden;background:white;`;
 
         row.innerHTML = `
             <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;gap:8px;">
-                <div style="font-size:14px;font-weight:600;color:#1e293b;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${topic}</div>
+                <div style="flex:1;min-width:0;overflow:hidden;">
+                    <div style="font-size:14px;font-weight:600;color:#1e293b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${topic}${timeLabel}</div>
+                    ${fcHint}
+                </div>
                 <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
                     ${scoreBadge}
                     <button class="quiz-btn" data-topic="${topic}"
@@ -1013,7 +2815,11 @@ function renderTopics() {
         row.querySelector(".quiz-btn").onclick = () => loadAndStartQuiz(topic);
         row.querySelector(".fc-btn").onclick   = (e) => { e.stopPropagation(); openFlashcardModal(topic); };
         div.appendChild(row);
+        } catch(err) {
+            console.error("❌ 分類 " + idx + " (" + topic + ") 渲染失敗：", err);
+        }
     });
+    console.log("✅ renderTopics 完成，渲染了", div.children.length, "個元素");
 
     // 底部：綜合練習 + 錯題閃卡
     const bottomWrap = document.createElement("div");
@@ -1043,8 +2849,9 @@ function renderTopics() {
 // ★ 按需載入指定分類題目，再開始測驗
 async function loadAndStartQuiz(topic) {
     currentSelectedTopic = topic;
-    isRetryMode = false;
+    isRetryMode   = false;
     attemptCount++;
+    quizStartTime = Date.now(); // ★ v1.6 記錄測驗開始時間
     hide("topic-section");
     // 完成度已整合進 topic-section，進入答題時 topic-section 本身就隱藏
     // 顯示載入中（借用 submitting-section）
@@ -1283,6 +3090,14 @@ function showResults(scoreCorrect) {
     const retryBtn = document.getElementById("btn-retry");
     wrong > 0 ? retryBtn.classList.remove("hidden") : retryBtn.classList.add("hidden");
 
+    // ★ 方案 A：低於達標分數時顯示閃卡提示橫幅
+    const hintBanner = document.getElementById("fc-hint-banner");
+    const passScore  = completionSettings?.passScore || 80;
+    if (hintBanner) {
+        if (scoreCalc < passScore && wrong > 0) hintBanner.classList.remove("hidden");
+        else hintBanner.classList.add("hidden");
+    }
+
     renderReviewList();
 
     // 非同步送出成績與明細（不影響顯示速度）
@@ -1301,7 +3116,8 @@ function showResults(scoreCorrect) {
     Promise.all([
         postGAS({ action:"submitScore", studentId, name:studentName,
             topic:currentSelectedTopic, mode:isRetryMode?"錯題重做":"完整測驗",
-            attempt:attemptCount, score:scoreCalc, correctCount:scoreCorrect, wrongCount:wrong }),
+            attempt:attemptCount, score:scoreCalc, correctCount:scoreCorrect, wrongCount:wrong,
+            duration: quizStartTime > 0 ? Math.round((Date.now() - quizStartTime) / 1000) : 0 }),
         postGAS({ action:"submitAnswerDetail", studentId, name:studentName,
             mode:isRetryMode?"錯題重做":"完整測驗", attempt:attemptCount, details }),
     ]).then(() => {
@@ -1560,7 +3376,7 @@ function renderMyCompletion(data) {
     const pct    = total > 0 ? Math.round((passed / total) * 100) : 0;
     const barColor = pct >= 80 ? "#22c55e" : pct >= 50 ? "#0ea5e9" : "#f43f5e";
 
-    // ★ 存到全域供 renderTopics 讀取（顯示各分類最高分）
+    // ★ 存到全域供 renderTopics 讀取（顯示各分類最高分 + 平均每題用時）
     window._completionDetails = details;
 
     // 顯示摘要（整合進 topic-section 頂部）
@@ -1581,7 +3397,7 @@ function renderMyCompletion(data) {
     }
 
     // 重新渲染分類列表（帶入完成度資訊）
-    renderTopics();
+    try { renderTopics(); } catch(e) { console.error("❌ renderMyCompletion → renderTopics 失敗：", e); }
 }
 
 async function loadCompletionRanking() {
@@ -1589,10 +3405,14 @@ async function loadCompletionRanking() {
         const res = await postGAS({ action: "getCompletionRanking" });
         if (res.status !== "ok") return;
         rankingData = res;
+        // ★ v1.5：已登入則不顯示排行（避免競態條件蓋掉 topic-section）
+        if (isLoggedIn) return;
         renderRankingSection(res);
         show("ranking-section");
+        show("login-section");
     } catch(e) {
         console.warn("排行載入失敗", e);
+        if (!isLoggedIn) show("login-section");
     }
 }
 
@@ -1776,10 +3596,9 @@ async function openRankingClassView(className) {
     appEl.className = appEl.className.replace("max-w-3xl", "max-w-7xl");
 
     const passScore = rankingData.passScore;
-    // ★ 分類順序依完成度設定，不依題庫順序
-    const topics = completionSettings?.completionTopics?.length
-        ? completionSettings.completionTopics
-        : (rankingData.completionTopics || []);
+    // ★ 分類順序依題庫順序（topicsData），篩選出完成度設定中的分類
+    const compTopicSet = new Set(rankingData.completionTopics || []);
+    const topics = topicsData.map(t => t.name).filter(n => compTopicSet.has(n));
 
     // 整理學生資料格式
     const students = (cls.students || []).map(stu => {
@@ -2380,10 +4199,12 @@ function openClassView(className) {
     const activeTopic = currentClassTopicFilter;
     const passScore  = completionSettings?.passScore || 80;
 
-    // ★ 只顯示完成度設定中的分類
+    // ★ 分類順序依題庫順序（topicsData），篩選出完成度設定中的分類
     const allCompTopics = completionSettings?.completionTopics || [];
+    const compSet = new Set(allCompTopics);
+    const sortedCompTopics = topicsData.map(t => t.name).filter(n => compSet.has(n));
     const topics = activeTopic === "ALL"
-        ? allCompTopics
+        ? sortedCompTopics
         : (allCompTopics.includes(activeTopic) ? [activeTopic] : [activeTopic]);
 
     const titleSuffix = activeTopic === "ALL" ? "全部單元" : activeTopic;
@@ -2670,11 +4491,18 @@ function renderTopicChart(tStats) {
         data:{labels:sorted.map(t=>t.topic),datasets:[{label:"答對率(%)",data:sorted.map(t=>t.rate??0),backgroundColor:colors,borderRadius:6}]},
         options:{responsive:true,plugins:{legend:{display:false}},scales:{y:{min:0,max:100,ticks:{stepSize:20},grid:{color:"#f0f0f0"}}}}
     });
+    // ★ v1.6 平均每題用時對照
+    const timeMap = {};
+    (teacherData.topicTimeList || []).forEach(t => { timeMap[t.topic] = t; });
+
     document.getElementById("topic-stats-list").innerHTML = sorted.map(t=>{
         const r=t.rate??0; const c=r<60?"bg-red-400":r<80?"bg-yellow-400":"bg-green-400"; const tc=r<60?"text-red-500":r<80?"text-yellow-500":"text-green-500";
+        const tt = timeMap[t.topic];
+        const timeStr = tt ? `<span class="text-xs font-semibold px-2 py-0.5 rounded-full" style="background:#f0f9ff;color:#0369a1;">⏱ ${tt.avgSec}秒/題</span>` : "";
         return `<div class="flex items-center gap-4 p-3 border border-gray-100 rounded-xl">
             <span class="font-medium text-gray-800 flex-1">${t.topic}</span>
             <span class="text-sm text-gray-400">作答 ${t.total} 次</span>
+            ${timeStr}
             <div class="w-32 rate-bar"><div class="rate-bar-fill ${c}" style="width:${r}%"></div></div>
             <span class="font-bold w-12 text-right ${tc}">${r}%</span>
         </div>`;
@@ -2686,10 +4514,13 @@ function renderSettingsTab(currentSettings) {
     // 分數
     document.getElementById("settings-pass-score").value = currentSettings?.passScore ?? 80;
 
-    // ── 分類勾選 ──
-    const allTopics     = teacherData?.topicStats?.map(t => t.topic) ||
-                          teacherData?.questionStats?.map(q => q.topic).filter((v,i,a)=>a.indexOf(v)===i) ||
-                          [];
+    // ── 分類勾選：依題庫順序（topicsData）──
+    // 先取題庫順序，再補入有作答但不在題庫的分類
+    const topicsFromDB  = topicsData.map(t => t.name);
+    const topicsFromStats = (teacherData?.topicStats?.map(t => t.topic) ||
+                             teacherData?.questionStats?.map(q => q.topic).filter((v,i,a)=>a.indexOf(v)===i) ||
+                             []).filter(t => !topicsFromDB.includes(t));
+    const allTopics = [...topicsFromDB, ...topicsFromStats];
     const checkedTopics = new Set(currentSettings?.completionTopics || []);
     document.getElementById("settings-topic-list").innerHTML = allTopics.length === 0
         ? '<p class="text-gray-400 text-sm col-span-2">請先載入分析數據（切換至其他 Tab 後再回來）</p>'
