@@ -313,7 +313,7 @@
 <!-- ★ 教師後台入口：藏在頁面底部，兩個「©」中間那個才是觸發點 -->
 <footer class="text-center py-4 mt-auto select-none">
     <span class="text-gray-200 text-xs">© 題庫系統</span>
-    <span class="text-gray-200 text-xs ml-2" id="version-badge" title="前端 v1.65 ／ 適配 GAS v9-6">v1.65</span>
+    <span class="text-gray-200 text-xs ml-2" id="version-badge" title="前端 v1.66 ／ 適配 GAS v9-66">v1.66</span>
     <button onclick="tryOpenAdminModal()"
             class="text-gray-200 text-xs ml-px hover:text-gray-300 focus:outline-none cursor-default"
             tabindex="-1" aria-hidden="true">©</button>
@@ -546,6 +546,7 @@
                 <button class="tab-btn px-5 py-2 rounded-full text-sm font-semibold border border-gray-200 bg-white" onclick="switchTab('question',event)" id="tab-btn-question">📋 題目難度分析 <span id="tab-question-badge" class="hidden text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full ml-1">需載入</span></button>
                 <button class="tab-btn px-5 py-2 rounded-full text-sm font-semibold border border-gray-200 bg-white" onclick="switchTab('topic',event)" id="tab-btn-topic">📚 單元統計 <span id="tab-topic-badge" class="hidden text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full ml-1">需載入</span></button>
                 <button class="tab-btn px-5 py-2 rounded-full text-sm font-semibold border border-gray-200 bg-white" onclick="switchTab('settings',event)">⚙️ 完成度設定</button>
+                <button class="tab-btn px-5 py-2 rounded-full text-sm font-semibold border border-gray-200 bg-white" onclick="switchTab('dupLogin',event)" id="tab-btn-dupLogin">⚠️ 重複登入</button>
             </div>
 
             <!-- Tab 1：班級總覽 -->
@@ -653,6 +654,18 @@
                 </button>
                 <p id="settings-save-status" class="text-sm mt-3 font-medium hidden"></p>
             </div>
+
+            <!-- ★ v1.66 重複登入報告 Tab -->
+            <div id="tab-dupLogin" class="tab-content bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-lg font-bold text-gray-800">⚠️ 重複登入報告</h2>
+                    <button onclick="loadDupLoginReport()" class="bg-amber-500 hover:bg-amber-600 text-white text-sm font-bold px-4 py-2 rounded-xl transition">🔍 載入報告</button>
+                </div>
+                <p class="text-sm text-gray-500 mb-4">顯示疑似在同一時段使用多個 Session 作答的學生。</p>
+                <div id="dup-login-list">
+                    <p class="text-gray-400 text-center py-8">點「載入報告」開始分析</p>
+                </div>
+            </div>
         </div>
     </div>
 </div>
@@ -664,10 +677,9 @@
 // ★ 將此 URL 換成你的 GAS Webapp URL
 const GAS_URL = 'https://script.google.com/macros/s/AKfycbyVAPaCD2RQ8KosHwObW00L7m-foWVdxwonDn0ftL6cukWsq_Mkz2VVskRQ8-gRMftp/exec';
 
-// ★ v1.4 Session Token + 即時踢出
+// ★ v1.66 Session Token（只用於記錄，不再輪詢驗證）
 let sessionToken   = "";
-let sessionTimer   = null;
-const SESSION_POLL = 300000; // ★ v1.65 每 5 分鐘驗證一次（降低 GAS 壓力）
+let clientIP       = "";  // ★ v1.66 記錄 IP 供成績舉證用
 
 // 取得 IP
 async function fetchClientIP() {
@@ -702,7 +714,7 @@ function getBrowserInfo() {
     return "其他";
 }
 
-// 登入時呼叫 GAS 取得 token
+// ★ v1.66 登入時取得 token，記錄備查（不再輪詢）
 async function loginWithToken(sid, name) {
     const ip      = await fetchClientIP();
     const device  = getDeviceInfo();
@@ -711,40 +723,13 @@ async function loginWithToken(sid, name) {
         const res = await postGAS({ action: "loginStudent", studentId: sid, name, ip, device, browser });
         if (res.status === "ok" && res.token) {
             sessionToken = res.token;
-            startSessionPolling();
+            clientIP     = ip;  // ★ 存下 IP 供後續送分用
         }
     } catch(e) { console.warn("loginWithToken 失敗", e); }
 }
 
-// 開始輪詢驗證
-function startSessionPolling() {
-    stopSessionPolling();
-    sessionTimer = setInterval(async () => {
-        if (!sessionToken || !studentId) return;
-        try {
-            const res = await postGAS({ action: "verifySession", studentId, token: sessionToken });
-            if (!res.valid) {
-                stopSessionPolling();
-                handleKickedOut(res.reason);
-            }
-        } catch(e) { /* 網路問題時靜默，不強制登出 */ }
-    }, SESSION_POLL);
-}
-
-// 停止輪詢
-function stopSessionPolling() {
-    if (sessionTimer) { clearInterval(sessionTimer); sessionTimer = null; }
-}
-
-// 被踢出時的處理
-function handleKickedOut(reason) {
-    stopSessionPolling();
-    studentId   = "";
-    studentName = "";
-    sessionToken = "";
-    alert("⚠️ 您的帳號已在其他裝置登入，目前裝置已被登出。\n請重新登入。");
-    location.reload();
-}
+// ★ v1.66 已移除 Session 輪詢（改為重複登入記錄）
+function stopSessionPolling() { /* 保留空函式避免其他地方呼叫出錯 */ }
 
 // ★ v1.3 倒數計時器
 let deadlineTimer = null;
@@ -1365,7 +1350,8 @@ function showResults(scoreCorrect) {
         postGAS({ action:"submitScore", studentId, name:studentName,
             topic:currentSelectedTopic, mode:isRetryMode?"錯題重做":"完整測驗",
             attempt:attemptCount, score:scoreCalc, correctCount:scoreCorrect, wrongCount:wrong,
-            duration: quizStartTime > 0 ? Math.round((Date.now() - quizStartTime) / 1000) : 0 }),
+            duration: quizStartTime > 0 ? Math.round((Date.now() - quizStartTime) / 1000) : 0,
+            token: sessionToken, ip: clientIP }),  // ★ v1.66 重複登入舉證
         postGAS({ action:"submitAnswerDetail", studentId, name:studentName,
             mode:isRetryMode?"錯題重做":"完整測驗", attempt:attemptCount, details }),
     ]).then(() => {
@@ -1610,7 +1596,8 @@ function showFlashcardDone() {
         postGAS({
             action: "submitScore", studentId, name: studentName,
             topic: fcTopic, mode: "閃卡複習", attempt: fcAttempt,
-            score, correctCount: correct, wrongCount: total - correct, duration
+            score, correctCount: correct, wrongCount: total - correct, duration,
+            token: sessionToken, ip: clientIP  // ★ v1.66 重複登入舉證
         }).catch(() => {});
 
         // 作答明細（更新 WrongIndex）
@@ -2880,6 +2867,7 @@ async function switchTab(tab, event) {
     event.currentTarget.classList.add("active");
     document.getElementById("tab-"+tab).classList.add("active");
     if (tab === "settings") renderSettingsTab(completionSettings);
+    if (tab === "dupLogin" && !dupLoginLoaded) loadDupLoginReport();
 
     // ★ 懶載入：題目難度分析 / 單元統計
     if ((tab === "question" || tab === "topic") && !detailStatsLoaded && !detailStatsLoading) {
@@ -3005,6 +2993,100 @@ async function postGAS(obj) {
     });
     return await res.json();
 }
+// ── 重複登入報告 ──
+let dupLoginLoaded = false;
+
+async function loadDupLoginReport() {
+    dupLoginLoaded = false;
+    const list = document.getElementById("dup-login-list");
+    list.innerHTML = '<div class="text-center py-8"><div class="w-8 h-8 border-4 border-sky-200 border-t-sky-500 rounded-full animate-spin mx-auto mb-3"></div><p class="text-gray-400 text-sm">分析中...</p></div>';
+    try {
+        const res = await postGAS({ action: "getDuplicateLoginReport" });
+        if (res.status !== "ok") throw new Error(res.message);
+        dupLoginLoaded = true;
+        renderDupLoginReport(res.suspects || []);
+    } catch(e) {
+        list.innerHTML = `<p class="text-red-500 text-center py-8">載入失敗：${e.message}</p>`;
+    }
+}
+
+function renderDupLoginReport(suspects) {
+    const list = document.getElementById("dup-login-list");
+    if (!suspects.length) {
+        list.innerHTML = '<p class="text-green-600 text-center py-8 font-semibold">✅ 未發現疑似重複登入</p>';
+        return;
+    }
+    list.innerHTML = suspects.map(s => {
+        const loginRows = s.logins.map(l => `
+            <tr class="border-b border-gray-50">
+                <td class="py-1.5 px-3 text-xs text-gray-500">${l.time}</td>
+                <td class="py-1.5 px-3 text-xs font-mono text-gray-400">${l.token.slice(-8)}</td>
+                <td class="py-1.5 px-3 text-xs text-gray-500">${l.ip}</td>
+                <td class="py-1.5 px-3 text-xs text-gray-500">${l.device} / ${l.browser}</td>
+                <td class="py-1.5 px-3 text-xs font-semibold ${l.status==='已取代'?'text-amber-600':'text-green-600'}">${l.status}</td>
+            </tr>`).join("");
+
+        // 用多個 token 送出成績的記錄
+        const tokenKeys = Object.keys(s.scoresByToken);
+        const scoreRows = tokenKeys.map(tok => {
+            const scores = s.scoresByToken[tok];
+            return scores.map(sc => `
+                <tr class="border-b border-gray-50">
+                    <td class="py-1.5 px-3 text-xs text-gray-500">${sc.time}</td>
+                    <td class="py-1.5 px-3 text-xs font-mono text-gray-400">${tok.slice(-8)}</td>
+                    <td class="py-1.5 px-3 text-xs text-gray-500">${sc.ip}</td>
+                    <td class="py-1.5 px-3 text-xs text-gray-600">${sc.topic}</td>
+                    <td class="py-1.5 px-3 text-xs font-bold ${sc.score>=80?'text-green-600':sc.score>=60?'text-yellow-500':'text-red-500'}">${sc.score}分</td>
+                </tr>`).join("");
+        }).join("");
+
+        const hasDupScore = tokenKeys.length >= 2;
+        const riskLevel   = hasDupScore ? '🔴 高風險：多 Token 送分' : '🟡 待確認：有重複 Session';
+        const riskCls     = hasDupScore ? 'border-red-200 bg-red-50' : 'border-amber-200 bg-amber-50';
+
+        return `<div class="border ${riskCls} rounded-2xl p-4 mb-4">
+            <div class="flex items-center justify-between mb-3">
+                <div>
+                    <span class="font-bold text-gray-800">${s.name}</span>
+                    <span class="text-gray-400 text-sm ml-2">${s.sid}</span>
+                </div>
+                <span class="text-xs font-bold px-2 py-1 rounded-full ${hasDupScore?'bg-red-100 text-red-700':'bg-amber-100 text-amber-700'}">${riskLevel}</span>
+            </div>
+            <div class="flex gap-4 text-xs text-gray-500 mb-3">
+                <span>登入次數：<strong>${s.loginCount}</strong></span>
+                <span>被取代次數：<strong class="text-amber-600">${s.replacedCount}</strong></span>
+                <span>使用過的 Token 數（送分）：<strong class="${hasDupScore?'text-red-600':'text-gray-700'}">${s.uniqueTokensInScore}</strong></span>
+            </div>
+            <details class="mb-3">
+                <summary class="text-xs font-semibold text-gray-600 cursor-pointer mb-2">📋 登入記錄（${s.loginCount} 筆）</summary>
+                <table class="w-full text-left">
+                    <thead><tr class="bg-gray-50">
+                        <th class="py-1 px-3 text-xs text-gray-400">時間</th>
+                        <th class="py-1 px-3 text-xs text-gray-400">Token(後8碼)</th>
+                        <th class="py-1 px-3 text-xs text-gray-400">IP</th>
+                        <th class="py-1 px-3 text-xs text-gray-400">裝置/瀏覽器</th>
+                        <th class="py-1 px-3 text-xs text-gray-400">狀態</th>
+                    </tr></thead>
+                    <tbody>${loginRows}</tbody>
+                </table>
+            </details>
+            ${hasDupScore ? `<details>
+                <summary class="text-xs font-semibold text-red-600 cursor-pointer mb-2">🎯 多 Token 送分記錄（${scoreRows.split('<tr').length-1} 筆）</summary>
+                <table class="w-full text-left">
+                    <thead><tr class="bg-gray-50">
+                        <th class="py-1 px-3 text-xs text-gray-400">時間</th>
+                        <th class="py-1 px-3 text-xs text-gray-400">Token(後8碼)</th>
+                        <th class="py-1 px-3 text-xs text-gray-400">IP</th>
+                        <th class="py-1 px-3 text-xs text-gray-400">單元</th>
+                        <th class="py-1 px-3 text-xs text-gray-400">分數</th>
+                    </tr></thead>
+                    <tbody>${scoreRows}</tbody>
+                </table>
+            </details>` : ""}
+        </div>`;
+    }).join("");
+}
+
 </script>
 </body>
 </html>
