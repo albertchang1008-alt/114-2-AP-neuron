@@ -323,7 +323,7 @@
 <!-- ★ 教師後台入口：藏在頁面底部，兩個「©」中間那個才是觸發點 -->
 <footer class="text-center py-4 mt-auto select-none">
     <span class="text-gray-200 text-xs">© 題庫系統</span>
-    <span class="text-gray-200 text-xs ml-2" id="version-badge" title="前端 v1.68 ／ 適配 GAS v9-68">v1.68</span>
+    <span class="text-gray-200 text-xs ml-2" id="version-badge" title="前端 v1.681 ／ 適配 GAS v9-681">v1.681</span>
     <button onclick="tryOpenAdminModal()"
             class="text-gray-200 text-xs ml-px hover:text-gray-300 focus:outline-none cursor-default"
             tabindex="-1" aria-hidden="true">©</button>
@@ -1788,11 +1788,37 @@ function renderHeatmapTable(students, topics, passScore, onCellClick, onNameClic
         const scoredCnt = topics.filter(t => (s.topicMap[t] ?? -1) >= passScore).length;
         const compColor = scoredCnt===topics.length?"#166534":scoredCnt>=topics.length*0.6?"#854d0e":"#991b1b";
         const compBg    = scoredCnt===topics.length?"#dcfce7":scoredCnt>=topics.length*0.6?"#fef9c3":"#fee2e2";
+        // ★ v1.681 計算該學生整體平均用時
+        const stuAvgSec = (() => {
+            if (!s.attempts) return null;
+            let totalSec = 0, totalQ = 0;
+            s.attempts.forEach(a => {
+                if (!a.isRetry && a.duration > 0) {
+                    totalSec += a.duration;
+                    totalQ   += (a.correct||0) + (a.wrong||0);
+                }
+            });
+            return totalQ > 0 ? Math.round(totalSec / totalQ) : null;
+        })();
+
         const cells = topics.map(t => {
             const sc = s.topicMap[t];
             const c  = heatColor(sc, passScore);
+            // ★ tooltip 加上該分類用時
+            const topicDur = (() => {
+                if (!s.attempts) return null;
+                let sec = 0, q = 0;
+                s.attempts.forEach(a => {
+                    if (!a.isRetry && a.topic === t && a.duration > 0) {
+                        sec += a.duration;
+                        q   += (a.correct||0) + (a.wrong||0);
+                    }
+                });
+                return q > 0 ? Math.round(sec / q) : null;
+            })();
+            const timeHint = topicDur ? ` ⏱${fmtTime(topicDur)}/題` : "";
             const cbAttr = onCellClick ? `onclick="${onCellClick}('${s.sid}','${t}')" style="cursor:pointer;"` : "";
-            return `<td ${cbAttr} title="${s.name} — ${t}：${c.val}"
+            return `<td ${cbAttr} title="${s.name} — ${t}：${c.val}分${timeHint}"
                 style="text-align:center;padding:6px 4px;background:${c.bg};
                 border-bottom:1px solid #e2e8f0;border-right:1px solid #f1f5f9;">
                 <span style="font-size:13px;font-weight:600;color:${c.color};">${c.val}</span>
@@ -1803,7 +1829,9 @@ function renderHeatmapTable(students, topics, passScore, onCellClick, onNameClic
             <td ${nameAttr} style="padding:8px 12px;border-bottom:1px solid #e2e8f0;
                 white-space:nowrap;min-width:120px;background:#fff;">
                 <div style="font-size:13px;font-weight:600;color:#1e293b;">${s.name}</div>
-                <div style="font-size:11px;color:#94a3b8;">${s.sid}</div>
+                <div style="font-size:11px;color:#94a3b8;">${s.sid}
+                    ${stuAvgSec ? `<span style="color:#0369a1;font-weight:600;margin-left:4px;">⏱${fmtTime(stuAvgSec)}/題</span>` : ""}
+                </div>
             </td>
             ${cells}
             <td style="text-align:center;padding:6px 10px;border-bottom:1px solid #e2e8f0;background:#fff;white-space:nowrap;">
@@ -1858,7 +1886,9 @@ function renderStudentCards(students, topics, passScore, onCardClick) {
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
                 <div>
                     <div style="font-size:14px;font-weight:700;color:#1e293b;">${s.name}</div>
-                    <div style="font-size:11px;color:#94a3b8;">${s.sid}</div>
+                    <div style="font-size:11px;color:#94a3b8;">${s.sid}
+                        ${stuAvgSec ? `<span style="color:#0369a1;font-weight:600;margin-left:4px;">⏱${fmtTime(stuAvgSec)}/題</span>` : ""}
+                    </div>
                 </div>
                 <span style="font-size:12px;font-weight:700;padding:3px 9px;border-radius:99px;
                     background:${compBg};color:${compColor};">${scoredCnt}/${topics.length}</span>
@@ -1868,6 +1898,14 @@ function renderStudentCards(students, topics, passScore, onCardClick) {
             </div>
         </div>`;
     }).join("");
+}
+
+// ★ v1.681 時間格式化：秒 → 分:秒
+function fmtTime(sec) {
+    if (!sec || sec <= 0) return "—";
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return m > 0 ? `${m}:${String(s).padStart(2,"0")}` : `0:${String(s).padStart(2,"0")}`;
 }
 
 // ★ 共用：色彩判斷
@@ -2635,20 +2673,39 @@ function openClassStudentDetail(sid, filterTopic) {
     const allTopicAttempts = info.attempts
         .filter(a => !filterTopic || a.topic === filterTopic)
         .reverse();
+
+    // ★ v1.681 計算整體平均用時
+    let totalSec = 0, totalQ = 0;
+    info.attempts.forEach(a => {
+        if (!a.isRetry && a.duration > 0) {
+            totalSec += a.duration;
+            totalQ   += (a.correct||0) + (a.wrong||0);
+        }
+    });
+    const overallAvg = totalQ > 0 ? Math.round(totalSec / totalQ) : null;
+
     document.getElementById("class-detail-attempts").innerHTML = allTopicAttempts.length === 0
         ? '<p class="text-gray-400 text-center py-4 text-sm">尚無此單元的測驗紀錄</p>'
-        : allTopicAttempts.map(a=>`
-        <div class="border border-gray-100 rounded-xl px-4 py-3 flex items-center justify-between bg-gray-50">
+        : `${overallAvg ? `<div class="flex items-center gap-2 mb-3 px-1">
+            <span class="text-xs font-semibold text-sky-700 bg-sky-50 px-3 py-1 rounded-full border border-sky-200">
+                ⏱ 整體平均 ${fmtTime(overallAvg)}/題
+            </span></div>` : ""}` +
+        allTopicAttempts.map(a => {
+            const avgSec = (a.duration > 0 && (a.correct+a.wrong) > 0)
+                ? Math.round(a.duration / (a.correct + a.wrong)) : null;
+            return `<div class="border border-gray-100 rounded-xl px-4 py-3 flex items-center justify-between bg-gray-50">
             <div>
                 <span class="text-sm font-semibold ${a.isRetry?"text-rose-500":"text-sky-600"}">${a.mode}</span>
                 <span class="text-xs text-gray-400 ml-2">${a.topic}</span>
             </div>
             <div class="flex items-center gap-3">
                 <span class="text-xs text-gray-400">${fmtDate(a.date)}</span>
+                ${avgSec ? `<span class="text-xs font-semibold px-2 py-0.5 rounded-full" style="background:#f0f9ff;color:#0369a1;">⏱${fmtTime(avgSec)}/題</span>` : ""}
                 <span class="font-bold text-2xl ${a.score>=80?"text-green-500":a.score>=60?"text-yellow-500":"text-red-500"}">${a.score}</span>
                 <span class="text-xs text-gray-400">分</span>
             </div>
-        </div>`).join("");
+        </div>`;
+        }).join("");
 }
 
 function closeClassStudentDetail() {
