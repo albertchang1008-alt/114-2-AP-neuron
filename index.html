@@ -261,6 +261,16 @@
         <p class="text-sm text-gray-500 mt-2">只需等待一次，請稍候</p>
     </section>
 
+    <!-- ★ v1.68 被踢出說明頁 -->
+    <section id="kicked-section" class="hidden bg-white rounded-2xl shadow-sm border border-rose-200 p-8 text-center max-w-md mx-auto mt-10">
+        <div class="text-5xl mb-4">⚠️</div>
+        <h2 class="text-xl font-bold text-gray-800 mb-2">帳號重複登入</h2>
+        <p class="text-sm text-gray-600 mb-2">您的帳號已在另一個裝置或視窗登入。</p>
+        <p class="text-sm font-semibold text-rose-600 mb-6">本次作答成績<strong>未計入</strong>。</p>
+        <p class="text-xs text-gray-400 mb-6">如有疑問請洽任課教師。</p>
+        <button onclick="location.reload()" class="bg-sky-500 hover:bg-sky-600 text-white font-bold px-8 py-3 rounded-xl transition">重新登入</button>
+    </section>
+
     <!-- 結果 -->
     <section id="result-section" class="hidden">
         <div class="bg-white rounded-2xl shadow-sm border border-pink-100 p-6 md:p-10 text-center mb-6">
@@ -313,7 +323,7 @@
 <!-- ★ 教師後台入口：藏在頁面底部，兩個「©」中間那個才是觸發點 -->
 <footer class="text-center py-4 mt-auto select-none">
     <span class="text-gray-200 text-xs">© 題庫系統</span>
-    <span class="text-gray-200 text-xs ml-2" id="version-badge" title="前端 v1.66 ／ 適配 GAS v9-66">v1.66</span>
+    <span class="text-gray-200 text-xs ml-2" id="version-badge" title="前端 v1.68 ／ 適配 GAS v9-68">v1.68</span>
     <button onclick="tryOpenAdminModal()"
             class="text-gray-200 text-xs ml-px hover:text-gray-300 focus:outline-none cursor-default"
             tabindex="-1" aria-hidden="true">©</button>
@@ -605,6 +615,12 @@
                 <h2 class="text-lg font-bold text-gray-800 mb-5">各單元答對率</h2>
                 <div class="mb-6" style="max-height:320px;"><canvas id="topic-chart"></canvas></div>
                 <div id="topic-stats-list" class="space-y-3"></div>
+                <!-- ★ v1.67 認知類型統計 -->
+                <div id="cog-type-section" class="hidden mt-8">
+                    <h3 class="text-base font-bold text-gray-800 mb-1">🧠 認知類型分析（方案 C）</h3>
+                    <p class="text-xs text-gray-400 mb-4">依題庫 M 欄認知類型，分析各類型的答對率與平均用時</p>
+                    <div id="cog-type-list" class="space-y-3"></div>
+                </div>
             </div>
 
             <!-- Tab 設定：完成度設定 -->
@@ -1184,6 +1200,7 @@ function prepareQuiz(sources) {
 // ── 渲染題目（純前端，立即顯示）──
 function renderQuestion() {
     const q = quizSession[currentQuestionIndex];
+    q._answerStartTime = Date.now(); // ★ v1.67 每題計時開始
     document.getElementById("quiz-progress").textContent = `進度 ${currentQuestionIndex + 1} / ${quizSession.length}`;
 
     const prefix = (currentSelectedTopic === "綜合練習" && q.top) ? `[${q.top.split(' ')[0]}] ` : "";
@@ -1241,6 +1258,9 @@ function handleOptionClick(clickedBtn, selectedIdx, qData) {
     });
     clickedBtn.classList.add("option-selected");
     qData.userSelectedIndex = selectedIdx; // ★ 只記錄，不送網路
+    // ★ v1.67 計算本題用時
+    qData.answerSec = qData._answerStartTime > 0
+        ? Math.round((Date.now() - qData._answerStartTime) / 1000) : null;
 
     setTimeout(() => {
         currentQuestionIndex++;
@@ -1344,19 +1364,29 @@ function showResults(scoreCorrect) {
         selectedText: q.shuffledOpts[q.userSelectedIndex] ?? "未作答",
         correctText:  q.serverCorrectText,
         isCorrect:    q.isCorrectlyAnswered,
+        answerSec:    q.answerSec ?? null,  // ★ v1.67 每題作答秒數
     }));
 
-    Promise.all([
-        postGAS({ action:"submitScore", studentId, name:studentName,
-            topic:currentSelectedTopic, mode:isRetryMode?"錯題重做":"完整測驗",
-            attempt:attemptCount, score:scoreCalc, correctCount:scoreCorrect, wrongCount:wrong,
-            duration: quizStartTime > 0 ? Math.round((Date.now() - quizStartTime) / 1000) : 0,
-            token: sessionToken, ip: clientIP }),  // ★ v1.66 重複登入舉證
-        postGAS({ action:"submitAnswerDetail", studentId, name:studentName,
-            mode:isRetryMode?"錯題重做":"完整測驗", attempt:attemptCount, details }),
-    ]).then(() => {
+    // ★ v1.68 先送 submitScore，若被踢出則顯示說明頁，不顯示成績
+    postGAS({ action:"submitScore", studentId, name:studentName,
+        topic:currentSelectedTopic, mode:isRetryMode?"錯題重做":"完整測驗",
+        attempt:attemptCount, score:scoreCalc, correctCount:scoreCorrect, wrongCount:wrong,
+        duration: quizStartTime > 0 ? Math.round((Date.now() - quizStartTime) / 1000) : 0,
+        token: sessionToken, ip: clientIP
+    }).then(res => {
+        if (res.status === "kicked") {
+            // 被踢出：隱藏結果頁，顯示說明頁
+            hide("result-section");
+            show("kicked-section");
+            return;
+        }
         document.getElementById("save-status").textContent = "✓ 成績已同步至雲端";
         document.getElementById("save-status").className   = "text-sm text-green-600 mb-4 font-medium";
+        // 明細非同步送出（不影響顯示）
+        postGAS({ action:"submitAnswerDetail", studentId, name:studentName,
+            mode:isRetryMode?"錯題重做":"完整測驗", attempt:attemptCount, details,
+            token: sessionToken
+        }).catch(() => {});
     }).catch(() => {
         document.getElementById("save-status").textContent = "⚠ 成績同步失敗，請檢查網路";
         document.getElementById("save-status").className   = "text-sm text-red-600 mb-4 font-medium";
@@ -1597,7 +1627,12 @@ function showFlashcardDone() {
             action: "submitScore", studentId, name: studentName,
             topic: fcTopic, mode: "閃卡複習", attempt: fcAttempt,
             score, correctCount: correct, wrongCount: total - correct, duration,
-            token: sessionToken, ip: clientIP  // ★ v1.66 重複登入舉證
+            token: sessionToken, ip: clientIP
+        }).then(res => {
+            if (res.status === "kicked") {
+                hide("flashcard-done-section");
+                show("kicked-section");
+            }
         }).catch(() => {});
 
         // 作答明細（更新 WrongIndex）
@@ -2789,6 +2824,40 @@ function renderTopicChart(tStats) {
             <span class="font-bold w-12 text-right ${tc}">${r}%</span>
         </div>`;
     }).join("");
+    // ★ v1.67 同時渲染認知類型統計
+    renderCogTypeStats(teacherData.cogTypeStats || []);
+}
+
+// ── 認知類型統計（方案 C）──────────────────────────────
+function renderCogTypeStats(cogList) {
+    const section = document.getElementById("cog-type-section");
+    const listEl  = document.getElementById("cog-type-list");
+    if (!cogList || cogList.length === 0) { section.classList.add("hidden"); return; }
+    section.classList.remove("hidden");
+
+    const sorted = [...cogList].sort((a,b) => (a.rate??0)-(b.rate??0));
+    listEl.innerHTML = sorted.map(c => {
+        const r    = c.rate ?? 0;
+        const rCls = r < 60 ? "text-red-500" : r < 80 ? "text-yellow-500" : "text-green-600";
+        const bCls = r < 60 ? "bg-red-400"   : r < 80 ? "bg-yellow-400"   : "bg-green-400";
+        const timeTag = c.avgSec != null
+            ? `<span class="text-xs font-semibold px-2 py-0.5 rounded-full" style="background:#f0f9ff;color:#0369a1;">⏱ ${c.avgSec}秒/題</span>`
+            : "";
+        // 標示陷阱題（快且錯）/ 高認知負荷（慢且對）
+        let badge = "";
+        if (c.avgSec != null) {
+            if (c.avgSec < 15 && r < 60) badge = `<span class="text-xs font-bold px-2 py-0.5 rounded-full bg-red-100 text-red-700">⚡ 直覺陷阱</span>`;
+            else if (c.avgSec > 60 && r >= 75) badge = `<span class="text-xs font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">🧠 高認知負荷</span>`;
+        }
+        return `<div class="flex items-center gap-4 p-3 border border-gray-100 rounded-xl">
+            <span class="font-semibold text-gray-800 flex-1">${c.cogType}</span>
+            <span class="text-sm text-gray-400">作答 ${c.total} 次</span>
+            ${timeTag}
+            ${badge}
+            <div class="w-28 rate-bar"><div class="rate-bar-fill ${bCls}" style="width:${r}%"></div></div>
+            <span class="font-bold w-12 text-right ${rCls}">${r}%</span>
+        </div>`;
+    }).join("");
 }
 
 // ── 設定 Tab ──────────────────────────────────
@@ -2898,6 +2967,7 @@ async function loadDetailStats() {
         teacherData.questionStats       = res.questionStats       || [];
         teacherData.topicStats          = res.topicStats          || [];
         teacherData.studentWrongDetails = res.studentWrongDetails || {};
+        teacherData.cogTypeStats        = res.cogTypeStats        || [];  // ★ v1.67
 
         detailStatsLoaded  = true;
         detailStatsLoading = false;
@@ -2911,7 +2981,10 @@ async function loadDetailStats() {
         // 重新渲染當前 Tab
         const activeTab = document.querySelector(".tab-btn.active");
         if (activeTab && activeTab.id === "tab-btn-question") renderQuestionStats(teacherData.questionStats);
-        else if (activeTab && activeTab.id === "tab-btn-topic") renderTopicChart(teacherData.topicStats);
+        else if (activeTab && activeTab.id === "tab-btn-topic") {
+            renderTopicChart(teacherData.topicStats);
+            renderCogTypeStats(teacherData.cogTypeStats);
+        }
 
     } catch(e) {
         detailStatsLoading = false;
