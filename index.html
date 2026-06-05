@@ -334,7 +334,7 @@
 <!-- ★ 教師後台入口：藏在頁面底部，兩個「©」中間那個才是觸發點 -->
 <footer class="text-center py-4 mt-auto select-none">
     <span class="text-gray-200 text-xs">© 題庫系統</span>
-    <span class="text-gray-200 text-xs ml-2" id="version-badge" title="前端 v1.682 ／ 適配 GAS v9-682">v1.682</span>
+    <span class="text-gray-200 text-xs ml-2" id="version-badge" title="前端 v1.683 ／ 適配 GAS v9-683">v1.683</span>
     <button onclick="tryOpenAdminModal()"
             class="text-gray-200 text-xs ml-px hover:text-gray-300 focus:outline-none cursor-default"
             tabindex="-1" aria-hidden="true">©</button>
@@ -748,15 +748,46 @@ async function loginWithToken(sid, name) {
     const browser = getBrowserInfo();
     try {
         const res = await postGAS({ action: "loginStudent", studentId: sid, name, ip, device, browser });
+        if (res.status === "kicked") {
+            showKicked();
+            return false;
+        }
         if (res.status === "ok" && res.token) {
             sessionToken = res.token;
             clientIP     = ip;  // ★ 存下 IP 供後續送分用
+            return true;
         }
-    } catch(e) { console.warn("loginWithToken 失敗", e); }
+        return false;
+    } catch(e) { console.warn("loginWithToken 失敗", e); return false; }
 }
 
 // ★ v1.66 已移除 Session 輪詢（改為重複登入記錄）
 function stopSessionPolling() { /* 保留空函式避免其他地方呼叫出錯 */ }
+
+function showKicked() {
+    isLoggedIn = false;
+    ["loading-section","error-section","login-section","ranking-section","topic-section",
+     "quiz-section","flashcard-loading-section","flashcard-section","flashcard-done-section",
+     "result-section","submitting-section"].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.classList.add("hidden");
+    });
+    show("kicked-section");
+}
+
+async function verifySessionOnce() {
+    if (!studentId || !sessionToken) return true;
+    try {
+        const res = await postGAS({ action: "verifySession", studentId, token: sessionToken });
+        if (res.valid === false || res.status === "kicked") {
+            showKicked();
+            return false;
+        }
+    } catch(e) {
+        console.warn("verifySessionOnce 失敗", e);
+    }
+    return true;
+}
 
 // ★ v1.3 倒數計時器
 let deadlineTimer = null;
@@ -860,6 +891,9 @@ let topicChartInst    = null;
 let teacherData       = null;
 
 document.addEventListener('DOMContentLoaded', fetchQuestionBank);
+document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && isLoggedIn) verifySessionOnce();
+});
 
 // ══════════════════════════════════════════════
 //  1. 載入題庫
@@ -947,10 +981,11 @@ async function fetchQuestionBank() {
 // ══════════════════════════════════════════════
 //  2. 學生登入（★ 本地比對，無網路請求，即時回應）
 // ══════════════════════════════════════════════
-function handleLogin() {
+async function handleLogin() {
     const idVal   = document.getElementById("input-id").value.trim();
     const nameVal = document.getElementById("input-name").value.trim();
     const errEl   = document.getElementById("login-error");
+    const loginBtn = document.getElementById("login-btn");
 
     if (!idVal || !nameVal) {
         showErr(errEl, "請完整填寫學號與姓名！"); return;
@@ -966,14 +1001,28 @@ function handleLogin() {
         }
     }
 
-    // 驗證通過，直接進入
     errEl.classList.add("hidden");
-    isLoggedIn  = true;  // ★ 設定登入狀態
+    loginBtn.disabled = true;
+    loginBtn.textContent = "登入中...";
+
     studentId   = idVal;
     studentName = nameVal;
+    const tokenOk = await loginWithToken(studentId, studentName);
+    if (!tokenOk) {
+        if (!document.getElementById("kicked-section").classList.contains("hidden")) return;
+        showErr(errEl, "登入驗證失敗，請重新嘗試");
+        loginBtn.disabled = false;
+        loginBtn.textContent = "進入系統";
+        studentId = "";
+        studentName = "";
+        return;
+    }
+
+    // 驗證通過，直接進入
+    isLoggedIn  = true;  // ★ 設定登入狀態
     document.getElementById("display-user-name").textContent = studentName;
-    // ★ v1.4 取得 token（非同步，不阻塞登入流程）
-    loginWithToken(studentId, studentName);
+    loginBtn.disabled = false;
+    loginBtn.textContent = "進入系統";
     hide("login-section");
     hide("ranking-section");
     // ★ #2：先顯示 loading，等完成度載入後一次渲染
@@ -1129,6 +1178,7 @@ function renderTopics() {
 
 // ★ 按需載入指定分類題目，再開始測驗
 async function loadAndStartQuiz(topic) {
+    if (!(await verifySessionOnce())) return;
     currentSelectedTopic = topic;
     isRetryMode   = false;
     attemptCount++;
@@ -1153,6 +1203,7 @@ async function loadAndStartQuiz(topic) {
 
 // ★ 按需載入指定分類題目，再開始閃卡
 async function loadAndStartFlashcard(topic) {
+    if (!(await verifySessionOnce())) return;
     currentSelectedTopic = topic;
     hide("topic-section");
     // 完成度已整合進 topic-section
@@ -1193,7 +1244,8 @@ async function loadTopicQuestions(topic, flashcard) {
 
 function startFullQuiz(topic) { loadAndStartQuiz(topic); } // 相容舊呼叫
 
-function startRetry() {
+async function startRetry() {
+    if (!(await verifySessionOnce())) return;
     isRetryMode = true;
     attemptCount++;
     // 完成度已整合進 topic-section
@@ -1385,6 +1437,12 @@ function showResults(scoreCorrect) {
 
     renderReviewList();
 
+    if (isRetryMode) {
+        document.getElementById("save-status").textContent = "錯題重做不計入成績紀錄";
+        document.getElementById("save-status").className   = "text-sm text-gray-400 mb-4 font-medium";
+        return;
+    }
+
     // 非同步送出成績與明細（不影響顯示速度）
     document.getElementById("save-status").textContent = "正在同步成績至雲端...";
     document.getElementById("save-status").className   = "text-sm text-blue-600 mb-4 font-medium";
@@ -1408,12 +1466,12 @@ function showResults(scoreCorrect) {
     }).then(res => {
         if (res.status === "kicked") {
             // 被踢出：隱藏結果頁，顯示說明頁
-            hide("result-section");
-            show("kicked-section");
+            showKicked();
             return;
         }
         document.getElementById("save-status").textContent = "✓ 成績已同步至雲端";
         document.getElementById("save-status").className   = "text-sm text-green-600 mb-4 font-medium";
+        loadCompletionRanking(true);
         // 明細非同步送出（不影響顯示）
         postGAS({ action:"submitAnswerDetail", studentId, name:studentName,
             mode:isRetryMode?"錯題重做":"完整測驗", attempt:attemptCount, details,
@@ -1673,8 +1731,7 @@ function showFlashcardDone() {
             token: sessionToken, ip: clientIP
         }).then(res => {
             if (res.status === "kicked") {
-                hide("flashcard-done-section");
-                show("kicked-section");
+                showKicked();
             } else {
                 // ★ 成績送出後更新完成度 + 觸發排行背景更新
                 if (completionSettings.completionTopics?.length > 0) loadMyCompletion();
@@ -1704,7 +1761,8 @@ function leaveFcConfirm() {
     }
 }
 
-function restartFlashcard() {
+async function restartFlashcard() {
+    if (!(await verifySessionOnce())) return;
     hide("flashcard-done-section");
     fcDeck  = shuffle([...fcKnown]);
     fcKnown = [];
@@ -1786,7 +1844,6 @@ async function loadCompletionRanking(todayOnly = false) {
         const res = await postGAS({ action: "getCompletionRanking" });
         if (res.status !== "ok") return;
         rankingData = res;
-        if (isLoggedIn) return;
         if (todayOnly) {
             // ★ 只更新今日練習人數，不重新渲染全部排行
             document.querySelectorAll("#ranking-list .student-row").forEach((row, idx) => {
@@ -1801,6 +1858,7 @@ async function loadCompletionRanking(todayOnly = false) {
             if (totalEl) totalEl.textContent = res.todayTotal ?? 0;
             return;
         }
+        if (isLoggedIn) return;
         hide("ranking-skeleton");
         show("ranking-list");
         renderRankingSection(res);
@@ -1860,7 +1918,7 @@ function renderRankingSection(data) {
                 </div>
             </div>
             <span class="text-xs font-bold min-w-[52px] text-right">
-                <span style="color:#10b981;">${todayCnt}</span><span class="text-gray-400">/${cls.studentCount}人</span>
+                <span class="today-cnt" style="color:#10b981;">${todayCnt}</span><span class="text-gray-400">/${cls.studentCount}人</span>
             </span>
             <svg class="w-3.5 h-3.5 text-gray-300 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
@@ -1874,7 +1932,7 @@ function renderRankingSection(data) {
             <div style="display:flex;align-items:center;gap:5px;">
                 <span style="font-size:14px;">📅</span>
                 <span style="font-size:12px;color:#64748b;">今天共</span>
-                <span style="font-size:20px;font-weight:900;color:#10b981;line-height:1;">${todayTotal ?? 0}</span>
+                <span class="today-total" style="font-size:20px;font-weight:900;color:#10b981;line-height:1;">${todayTotal ?? 0}</span>
                 <span style="font-size:12px;color:#64748b;">人練習過</span>
             </div>
             <span style="font-size:11px;color:#94a3b8;background:#f8fafc;padding:2px 8px;border-radius:99px;border:1px solid #e2e8f0;">共 ${totalStudents} 人</span>
@@ -2194,8 +2252,9 @@ async function loadWrongFcCount() {
     }
 }
 
-function startWrongFcQuiz() {
+async function startWrongFcQuiz() {
     if (!wfcQuestions.length) return;
+    if (!(await verifySessionOnce())) return;
     closeWrongFcModal();
     hide("topic-section");
     // 完成度已整合進 topic-section
@@ -2274,6 +2333,7 @@ function closeFcModeModal() {
 
 async function startFcMode(mode) {
     closeFcModeModal();
+    if (!(await verifySessionOnce())) return;
 
     if (mode === "all") {
         // 全部題目：原有邏輯
@@ -2400,6 +2460,7 @@ function closeComboModal() {
 }
 
 async function startComboQuiz() {
+    if (!(await verifySessionOnce())) return;
     const selectedTopics = [...document.querySelectorAll(".combo-topic-cb:checked")].map(cb => cb.value);
     const count = parseInt(document.getElementById("combo-count").value) || 30;
 
@@ -3266,7 +3327,7 @@ function renderDupLoginReport(suspects) {
                 <td class="py-1.5 px-3 text-xs font-mono text-gray-400">${l.token.slice(-8)}</td>
                 <td class="py-1.5 px-3 text-xs text-gray-500">${l.ip}</td>
                 <td class="py-1.5 px-3 text-xs text-gray-500">${l.device} / ${l.browser}</td>
-                <td class="py-1.5 px-3 text-xs font-semibold ${l.status==='已取代'?'text-amber-600':'text-green-600'}">${l.status}</td>
+                <td class="py-1.5 px-3 text-xs font-semibold ${l.status==='kicked'?'text-amber-600':'text-green-600'}">${l.status === 'kicked' ? '已踢出' : '有效'}</td>
             </tr>`).join("");
 
         // 用多個 token 送出成績的記錄
@@ -3297,7 +3358,7 @@ function renderDupLoginReport(suspects) {
             </div>
             <div class="flex gap-4 text-xs text-gray-500 mb-3">
                 <span>登入次數：<strong>${s.loginCount}</strong></span>
-                <span>被取代次數：<strong class="text-amber-600">${s.replacedCount}</strong></span>
+                <span>被踢出次數：<strong class="text-amber-600">${s.replacedCount}</strong></span>
                 <span>使用過的 Token 數（送分）：<strong class="${hasDupScore?'text-red-600':'text-gray-700'}">${s.uniqueTokensInScore}</strong></span>
             </div>
             <details class="mb-3">
