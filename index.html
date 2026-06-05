@@ -204,7 +204,7 @@
             <div class="flex-1 bg-gray-100 rounded-full h-2.5 overflow-hidden">
                 <div id="fc-progress-bar" class="bg-green-400 h-2.5 rounded-full transition-all duration-500" style="width:0%"></div>
             </div>
-            <span class="text-xs text-red-400 font-medium w-14" id="fc-unknown-count">❌ 0 待學</span>
+            <span class="text-xs text-red-400 font-medium w-14" id="fc-unknown-count">❌ 0 剩餘</span>
         </div>
 
         <!-- ★ 正面：題目 + 選項（不用翻轉卡片，直接呈現） -->
@@ -224,6 +224,20 @@
         <div id="fc-back" class="hidden">
             <!-- 對錯橫幅 -->
             <div id="fc-result-banner" class="rounded-xl p-4 mb-4 text-center font-bold text-lg"></div>
+            <!-- 題目 -->
+            <div class="bg-white border border-gray-200 rounded-xl p-4 mb-3">
+                <p class="text-xs text-gray-400 font-semibold mb-1 uppercase tracking-wider">題目</p>
+                <div id="fc-back-img-area" class="hidden mb-3">
+                    <img id="fc-back-img" src="" alt="題目圖片"
+                        class="max-w-full max-h-56 mx-auto rounded-lg border border-gray-200 object-contain">
+                </div>
+                <p id="fc-back-question" class="text-gray-800 font-semibold leading-relaxed"></p>
+            </div>
+            <!-- 學生選擇 -->
+            <div class="bg-gray-50 border border-gray-200 rounded-xl p-4 mb-3">
+                <p class="text-xs text-gray-400 font-semibold mb-1 uppercase tracking-wider">你的選擇</p>
+                <p id="fc-selected-answer" class="text-gray-700 font-semibold leading-snug"></p>
+            </div>
             <!-- 正確答案 -->
             <div class="bg-sky-50 border border-sky-200 rounded-xl p-4 mb-3">
                 <p class="text-xs text-sky-500 font-semibold mb-1 uppercase tracking-wider">正確答案</p>
@@ -235,14 +249,10 @@
                 <p id="fc-exp" class="text-gray-700 text-sm leading-relaxed"></p>
             </div>
             <!-- 下一張按鈕 -->
-            <div class="flex gap-3 justify-center">
-                <button onclick="fcNext(false)"
-                    class="flex-1 max-w-xs bg-red-50 hover:bg-red-100 border-2 border-red-200 text-red-600 font-bold py-4 rounded-2xl transition text-base">
-                    ❌ 再複習一次
-                </button>
-                <button onclick="fcNext(true)"
-                    class="flex-1 max-w-xs bg-green-50 hover:bg-green-100 border-2 border-green-200 text-green-600 font-bold py-4 rounded-2xl transition text-base">
-                    ✅ 已掌握
+            <div class="flex justify-center">
+                <button onclick="fcNext()"
+                    class="w-full max-w-sm bg-sky-500 hover:bg-sky-600 text-white font-bold py-4 rounded-2xl transition text-base shadow-md shadow-sky-100">
+                    下一題
                 </button>
             </div>
         </div>
@@ -1202,12 +1212,12 @@ async function loadAndStartQuiz(topic) {
 }
 
 // ★ 按需載入指定分類題目，再開始閃卡
-async function loadAndStartFlashcard(topic) {
-    if (!(await verifySessionOnce())) return;
+async function loadAndStartFlashcard(topic, skipSessionCheck = false) {
     currentSelectedTopic = topic;
     hide("topic-section");
     // 完成度已整合進 topic-section
     show("flashcard-loading-section");
+    if (!skipSessionCheck && !(await verifySessionOnce())) return;
     try {
         await loadTopicQuestions(topic, true); // flashcard=true 回傳答案
         hide("flashcard-loading-section");
@@ -1576,7 +1586,7 @@ function renderFlashcard() {
     const pct   = total > 0 ? Math.round((known / total) * 100) : 0;
     document.getElementById("fc-progress").textContent      = `${known} / ${total}`;
     document.getElementById("fc-known-count").textContent   = `✅ ${known}`;
-    document.getElementById("fc-unknown-count").textContent = `❌ ${fcDeck.length} 待學`;
+    document.getElementById("fc-unknown-count").textContent = `❌ ${fcDeck.length} 剩餘`;
     document.getElementById("fc-progress-bar").style.width  = pct + "%";
 
     // 圖片
@@ -1657,6 +1667,19 @@ function fcSelectOption(clickedBtn, selectedOpt, q) {
             banner.className = "rounded-xl p-4 mb-4 text-center font-bold text-lg bg-red-50 border-2 border-red-300 text-red-600";
         }
 
+        // 題目與學生選擇
+        document.getElementById("fc-back-question").textContent = q.q || "";
+        document.getElementById("fc-selected-answer").textContent = selectedOpt || "未選擇";
+        const backImgArea = document.getElementById("fc-back-img-area");
+        const backImgEl   = document.getElementById("fc-back-img");
+        if (q.isImage && q.imgUrl) {
+            backImgArea.classList.remove("hidden");
+            backImgEl.src = q.imgUrl;
+        } else {
+            backImgArea.classList.add("hidden");
+            backImgEl.src = "";
+        }
+
         // 正確答案
         document.getElementById("fc-answer").textContent = q.ans || "（無答案資料）";
 
@@ -1689,18 +1712,17 @@ function fcSelectOption(clickedBtn, selectedOpt, q) {
     }, 500);
 }
 
-// 「已掌握」或「再複習一次」
-function fcNext(markKnown) {
+// 前往下一題
+function fcNext() {
     if (!fcCurrentCard) return;
     const card = fcDeck.shift();
-    if (markKnown) fcKnown.push(card);
-    else           fcDeck.push(card); // 放回末尾
+    fcKnown.push(card);
     fcCurrentCard = null;
     renderFlashcard();
 }
 
 // 相容舊呼叫
-function fcAnswer(knew) { fcNext(knew); }
+function fcAnswer() { fcNext(); }
 function flipCard() {}   // 新版不需要，保留避免報錯
 
 function showFlashcardDone() {
@@ -1754,7 +1776,7 @@ function leaveFcConfirm() {
     if (fcAnswerLog.length > 0 && fcDeck.length > 0 && !fcIsWrongMode) {
         const done  = fcKnown.length;
         const total = fcKnown.length + fcDeck.length;
-        const msg   = `目前已答 ${done}/${total} 題。\n\n中途離開不會計入成績，確定要離開嗎？`;
+        const msg   = `目前已答 ${done}/${total} 題。\n\n離開後本次閃卡不會計入成績，確定要離開嗎？`;
         if (confirm(msg)) backToTopics();
     } else {
         backToTopics();
@@ -2332,18 +2354,18 @@ function closeFcModeModal() {
 }
 
 async function startFcMode(mode) {
-    closeFcModeModal();
-    if (!(await verifySessionOnce())) return;
-
     if (mode === "all") {
+        closeFcModeModal();
         // 全部題目：原有邏輯
         await loadAndStartFlashcard(fcModalTopic);
     } else {
         // 錯題複習：直接用已載入的錯題資料
         if (!fcWrongQuestions.length) return;
+        closeFcModeModal();
         hide("topic-section");
         // 完成度已整合進 topic-section
         show("flashcard-loading-section");
+        if (!(await verifySessionOnce())) return;
         // 錯題已含 ans/exp，直接使用
         allQuestionsData = fcWrongQuestions;
         hide("flashcard-loading-section");
