@@ -344,7 +344,7 @@
 <!-- ★ 教師後台入口：藏在頁面底部，兩個「©」中間那個才是觸發點 -->
 <footer class="text-center py-4 mt-auto select-none">
     <span class="text-gray-200 text-xs">© 題庫系統</span>
-    <span class="text-gray-200 text-xs ml-2" id="version-badge" title="前端 v1.683 ／ 適配 GAS v9-683">v1.683</span>
+    <span class="text-gray-200 text-xs ml-2" id="version-badge" title="前端 v1.684 ／ 適配 GAS v9-684">v1.684</span>
     <button onclick="tryOpenAdminModal()"
             class="text-gray-200 text-xs ml-px hover:text-gray-300 focus:outline-none cursor-default"
             tabindex="-1" aria-hidden="true">©</button>
@@ -576,6 +576,7 @@
                 <button class="tab-btn active px-5 py-2 rounded-full text-sm font-semibold border border-gray-200 bg-white" onclick="switchTab('class',event)">🏫 班級總覽</button>
                 <button class="tab-btn px-5 py-2 rounded-full text-sm font-semibold border border-gray-200 bg-white" onclick="switchTab('question',event)" id="tab-btn-question">📋 題目難度分析 <span id="tab-question-badge" class="hidden text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full ml-1">需載入</span></button>
                 <button class="tab-btn px-5 py-2 rounded-full text-sm font-semibold border border-gray-200 bg-white" onclick="switchTab('topic',event)" id="tab-btn-topic">📚 單元統計 <span id="tab-topic-badge" class="hidden text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full ml-1">需載入</span></button>
+                <button class="tab-btn px-5 py-2 rounded-full text-sm font-semibold border border-gray-200 bg-white" onclick="switchTab('analysis',event)" id="tab-btn-analysis">📊 分析快取</button>
                 <button class="tab-btn px-5 py-2 rounded-full text-sm font-semibold border border-gray-200 bg-white" onclick="switchTab('settings',event)">⚙️ 完成度設定</button>
                 <button class="tab-btn px-5 py-2 rounded-full text-sm font-semibold border border-gray-200 bg-white" onclick="switchTab('dupLogin',event)" id="tab-btn-dupLogin">⚠️ 重複登入</button>
             </div>
@@ -639,9 +640,35 @@
                 <!-- ★ v1.67 認知類型統計 -->
                 <div id="cog-type-section" class="hidden mt-8">
                     <h3 class="text-base font-bold text-gray-800 mb-1">🧠 認知類型分析（方案 C）</h3>
-                    <p class="text-xs text-gray-400 mb-4">依題庫 M 欄認知類型，分析各類型的答對率與平均用時</p>
+                    <p class="text-xs text-gray-400 mb-4">依題庫 N 欄認知類型，分析各類型的答對率與平均用時</p>
                     <div id="cog-type-list" class="space-y-3"></div>
                 </div>
+            </div>
+
+            <!-- Tab 4：分析快取 -->
+            <div id="tab-analysis" class="tab-content bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
+                <div class="flex items-center justify-between mb-4 flex-wrap gap-3">
+                    <div>
+                        <h2 class="text-lg font-bold text-gray-800">分析快取</h2>
+                        <p class="text-xs text-gray-400 mt-1">資料由每小時更新產生；需要立即更新時可按右側按鈕。</p>
+                    </div>
+                    <button onclick="refreshAnalysisCache()" class="bg-sky-500 hover:bg-sky-600 text-white text-sm font-bold px-4 py-2 rounded-xl transition">立即更新</button>
+                </div>
+                <div id="analysis-summary" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5"></div>
+                <div class="flex gap-2 flex-wrap mb-4">
+                    <button class="analysis-view-btn px-3 py-1 rounded-full text-xs font-semibold border bg-sky-500 text-white border-sky-500" data-view="classCategory" onclick="setAnalysisView('classCategory')">班級分類</button>
+                    <button class="analysis-view-btn px-3 py-1 rounded-full text-xs font-semibold border bg-white text-gray-600 border-gray-200" data-view="studentCategory" onclick="setAnalysisView('studentCategory')">學生分類</button>
+                    <button class="analysis-view-btn px-3 py-1 rounded-full text-xs font-semibold border bg-white text-gray-600 border-gray-200" data-view="questionType" onclick="setAnalysisView('questionType')">題型</button>
+                    <button class="analysis-view-btn px-3 py-1 rounded-full text-xs font-semibold border bg-white text-gray-600 border-gray-200" data-view="questionStats" onclick="setAnalysisView('questionStats')">題目</button>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+                    <input id="analysis-search" type="text" placeholder="搜尋班級、學號、分類、題目..."
+                        class="border border-gray-200 rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300"
+                        oninput="renderAnalysisTable()">
+                    <select id="analysis-class-filter" class="border border-gray-200 rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300" onchange="renderAnalysisTable()"></select>
+                    <select id="analysis-topic-filter" class="border border-gray-200 rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300" onchange="renderAnalysisTable()"></select>
+                </div>
+                <div id="analysis-cache-list" class="overflow-x-auto border border-gray-100 rounded-xl"></div>
             </div>
 
             <!-- Tab 設定：完成度設定 -->
@@ -1249,9 +1276,10 @@ async function loadTopicQuestions(topic, flashcard) {
         color:   item.color   || "red",
         isImage: item.isImage || false,
         imgUrl:  item.imgUrl  || "",
+        questionType: item.questionType || "",
         ans:     item.ans     || "",
         exp:     item.exp     || "",
-        cogType: item.cogType || "", // ★ M欄認知類型
+        cogType: item.cogType || "", // ★ N欄認知類型
     }));
 }
 
@@ -1278,6 +1306,7 @@ function prepareQuiz(sources) {
         shuffledOpts:   shuffle([...src.options]),
         isImage:        src.isImage || false,
         imgUrl:         src.imgUrl  || "",
+        questionType:   src.questionType || "",
         cogType:        src.cogType || "",  // ★ 認知類型
         userSelectedIndex:   null,
         isCorrectlyAnswered: false,
@@ -1468,6 +1497,8 @@ function showResults(scoreCorrect) {
         correctText:  q.serverCorrectText,
         isCorrect:    q.isCorrectlyAnswered,
         answerSec:    q.answerSec ?? null,  // ★ v1.67 每題作答秒數
+        questionType: q.questionType || "",
+        cogType:      q.cogType || "",
     }));
 
     // ★ v1.68 先送 submitScore，若被踢出則顯示說明頁，不顯示成績
@@ -1579,6 +1610,7 @@ function renderFlashcard() {
 
     fcCurrentCard = fcDeck[0];
     const q = fcCurrentCard;
+    q._answerStartTime = Date.now();
 
     // 重置：顯示正面，隱藏背面
     show("fc-front"); hide("fc-back");
@@ -1640,6 +1672,7 @@ function fcSelectOption(clickedBtn, selectedOpt, q) {
     const cleanSel  = selectedOpt.replace(/^([1-4]|[A-D])[.\-、\s]*/i,"").trim().toLowerCase().replace(/\s+/g," ");
     const cleanCorr = (q.ans||"").replace(/^([1-4]|[A-D])[.\-、\s]*/i,"").trim().toLowerCase().replace(/\s+/g," ");
     const isCorrect = cleanSel === cleanCorr;
+    const answerSec = q._answerStartTime > 0 ? Math.round((Date.now() - q._answerStartTime) / 1000) : null;
 
     // ★ 直接找出正確選項的 index，不逐一文字比對
     const correctIndex = q.shuffledOpts.findIndex(opt =>
@@ -1709,7 +1742,10 @@ function fcSelectOption(clickedBtn, selectedOpt, q) {
                 topic:        q.top  || fcTopic || "",
                 selectedText: selectedOpt || "",
                 correctText:  q.ans  || "",
-                isCorrect:    isCorrect
+                isCorrect:    isCorrect,
+                answerSec:    answerSec,
+                questionType: q.questionType || "",
+                cogType:      q.cogType || ""
             });
         }
     }, 500);
@@ -3201,6 +3237,10 @@ async function saveCompletionSettings() {
 
 let detailStatsLoaded  = false;
 let detailStatsLoading = false;
+let analysisCacheLoaded = false;
+let analysisCacheLoading = false;
+let analysisCacheData = null;
+let currentAnalysisView = "classCategory";
 
 async function switchTab(tab, event) {
     document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
@@ -3209,11 +3249,124 @@ async function switchTab(tab, event) {
     document.getElementById("tab-"+tab).classList.add("active");
     if (tab === "settings") renderSettingsTab(completionSettings);
     if (tab === "dupLogin" && !dupLoginLoaded) loadDupLoginReport();
+    if (tab === "analysis" && !analysisCacheLoaded && !analysisCacheLoading) loadAnalysisCache(false);
 
     // ★ 懶載入：題目難度分析 / 單元統計
     if ((tab === "question" || tab === "topic") && !detailStatsLoaded && !detailStatsLoading) {
         await loadDetailStats();
     }
+}
+
+function analysisCell(v) {
+    if (v === null || v === undefined || v === "") return "—";
+    return String(v).replace(/[&<>"']/g, ch => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[ch]));
+}
+
+async function loadAnalysisCache(force) {
+    if (analysisCacheLoading) return;
+    analysisCacheLoading = true;
+    const list = document.getElementById("analysis-cache-list");
+    if (list) list.innerHTML = `<div class="text-center py-12 text-gray-400 text-sm">載入分析快取中...</div>`;
+    try {
+        const res = await postGAS({ action: "getAnalysisCache", force: force === true });
+        if (res.status !== "ok") throw new Error(res.message || "載入失敗");
+        analysisCacheData = {
+            classCategory: res.classCategory || [],
+            studentCategory: res.studentCategory || [],
+            questionType: res.questionType || [],
+            questionStats: res.questionStats || [],
+        };
+        analysisCacheLoaded = true;
+        analysisCacheLoading = false;
+        renderAnalysisControls();
+        renderAnalysisSummary();
+        renderAnalysisTable();
+    } catch(e) {
+        analysisCacheLoading = false;
+        if (list) list.innerHTML = `<div class="text-center py-12 text-red-500 text-sm">載入失敗：${analysisCell(e.message)}</div>`;
+    }
+}
+
+function refreshAnalysisCache() {
+    analysisCacheLoaded = false;
+    loadAnalysisCache(true);
+}
+
+function setAnalysisView(view) {
+    currentAnalysisView = view;
+    document.querySelectorAll(".analysis-view-btn").forEach(btn => {
+        const active = btn.dataset.view === view;
+        btn.className = `analysis-view-btn px-3 py-1 rounded-full text-xs font-semibold border ${active ? "bg-sky-500 text-white border-sky-500" : "bg-white text-gray-600 border-gray-200"}`;
+    });
+    renderAnalysisControls();
+    renderAnalysisTable();
+}
+
+function renderAnalysisSummary() {
+    const el = document.getElementById("analysis-summary");
+    if (!el || !analysisCacheData) return;
+    const items = [
+        ["班級分類", analysisCacheData.classCategory.length, "筆"],
+        ["學生分類", analysisCacheData.studentCategory.length, "筆"],
+        ["題型統計", analysisCacheData.questionType.length, "筆"],
+        ["題目統計", analysisCacheData.questionStats.length, "題"],
+    ];
+    el.innerHTML = items.map(([label, val, unit]) => `
+        <div class="border border-gray-100 rounded-xl p-3 bg-gray-50">
+            <p class="text-xs text-gray-400 mb-1">${label}</p>
+            <p class="text-2xl font-bold text-gray-800">${val}<span class="text-xs text-gray-400 ml-1">${unit}</span></p>
+        </div>`).join("");
+}
+
+function renderAnalysisControls() {
+    const clsSel = document.getElementById("analysis-class-filter");
+    const topicSel = document.getElementById("analysis-topic-filter");
+    if (!clsSel || !topicSel || !analysisCacheData) return;
+    const rows = analysisCacheData[currentAnalysisView] || [];
+    const classes = [...new Set(rows.map(r => r["班級"]).filter(Boolean))].sort((a,b)=>String(a).localeCompare(String(b), "zh-TW"));
+    const topics = [...new Set(rows.map(r => r["分類"]).filter(Boolean))].sort((a,b)=>String(a).localeCompare(String(b), "zh-TW"));
+    clsSel.innerHTML = `<option value="ALL">全部班級</option>` + classes.map(c => `<option value="${analysisCell(c)}">${analysisCell(c)}</option>`).join("");
+    topicSel.innerHTML = `<option value="ALL">全部分類</option>` + topics.map(t => `<option value="${analysisCell(t)}">${analysisCell(t)}</option>`).join("");
+    clsSel.disabled = classes.length === 0;
+    topicSel.disabled = topics.length === 0;
+}
+
+function renderAnalysisTable() {
+    const el = document.getElementById("analysis-cache-list");
+    if (!el || !analysisCacheData) return;
+    const kw = (document.getElementById("analysis-search")?.value || "").trim().toLowerCase();
+    const cls = document.getElementById("analysis-class-filter")?.value || "ALL";
+    const topic = document.getElementById("analysis-topic-filter")?.value || "ALL";
+    const rows = (analysisCacheData[currentAnalysisView] || []).filter(r => {
+        if (cls !== "ALL" && String(r["班級"] || "") !== cls) return false;
+        if (topic !== "ALL" && String(r["分類"] || "") !== topic) return false;
+        if (!kw) return true;
+        return Object.values(r).some(v => String(v || "").toLowerCase().includes(kw));
+    });
+    if (!rows.length) {
+        el.innerHTML = `<div class="text-center py-12 text-gray-400 text-sm">沒有符合條件的資料</div>`;
+        return;
+    }
+    const viewHeaders = {
+        classCategory: ["更新時間","班級","分類","作答人數","作答題數","答對率","平均作答秒數"],
+        studentCategory: ["班級","學號","姓名","分類","作答題數","答對率","平均作答秒數"],
+        questionType: ["班級","題型","作答人數","作答題數","答對率","平均作答秒數"],
+        questionStats: ["題目ID","分類","題型","認知類型","題目","作答人數","作答題數","答對率","平均作答秒數","常錯選項"],
+    };
+    const headers = viewHeaders[currentAnalysisView] || Object.keys(rows[0]);
+    const bodyRows = rows.slice(0, 500);
+    el.innerHTML = `
+        <table class="min-w-full text-sm">
+            <thead class="bg-gray-50 text-gray-500">
+                <tr>${headers.map(h => `<th class="text-left font-semibold px-3 py-2 whitespace-nowrap">${analysisCell(h)}</th>`).join("")}</tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100">
+                ${bodyRows.map(r => `<tr class="hover:bg-sky-50/40">
+                    ${headers.map(h => `<td class="px-3 py-2 align-top ${h==="題目" ? "min-w-[360px]" : "whitespace-nowrap"}">${analysisCell(r[h])}</td>`).join("")}
+                </tr>`).join("")}
+            </tbody>
+        </table>
+        ${rows.length > 500 ? `<div class="px-3 py-2 bg-gray-50 text-xs text-gray-400">已顯示前 500 筆，請用搜尋或篩選縮小範圍。</div>` : ""}`;
 }
 
 async function loadDetailStats() {
