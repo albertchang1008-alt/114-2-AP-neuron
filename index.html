@@ -15,6 +15,18 @@
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
         .option-btn { transition: all 0.2s ease-in-out; }
         .option-selected  { background-color:#0ea5e9!important; color:white!important; border-color:#0ea5e9!important; transform:scale(0.98); }
+        @media (hover: none) {
+            .option-btn:hover {
+                background-color:#fff!important;
+                border-color:#e5e7eb!important;
+                color:#374151!important;
+            }
+            .option-btn.option-selected:hover {
+                background-color:#0ea5e9!important;
+                border-color:#0ea5e9!important;
+                color:#fff!important;
+            }
+        }
         .loader { border:4px solid #f3f3f3; border-top:4px solid #db2777; border-radius:50%; width:40px; height:40px; animation:spin 1s linear infinite; }
         @keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}
 
@@ -1403,7 +1415,7 @@ function renderQuestion() {
     container.innerHTML = "";
     q.shuffledOpts.forEach((optText, idx) => {
         const btn = document.createElement("button");
-        btn.className = "option-btn w-full text-left bg-gray-50 border border-gray-200 hover:bg-pink-50 hover:border-pink-300 text-gray-700 font-medium rounded-xl p-4";
+        btn.className = "option-btn w-full text-left bg-white border border-gray-200 text-gray-700 font-medium rounded-xl p-4";
         btn.textContent = optText;
         btn.onclick = () => handleOptionClick(btn, idx, q);
         container.appendChild(btn);
