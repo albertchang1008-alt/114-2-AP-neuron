@@ -361,7 +361,7 @@
 <!-- ★ 教師後台入口：藏在頁面底部，兩個「©」中間那個才是觸發點 -->
 <footer class="text-center py-4 mt-auto select-none">
     <span class="text-gray-200 text-xs">© 題庫系統</span>
-    <span class="text-gray-200 text-xs ml-2" id="version-badge" title="前端 v1.6851 ／ 適配 GAS v9-684 + Firebase">v1.6851</span>
+    <span class="text-gray-200 text-xs ml-2" id="version-badge" title="前端 v1.69 ／ Firebase-first">v1.69</span>
     <button onclick="location.href='admin.html'"
             class="text-gray-200 text-xs ml-px hover:text-gray-300 focus:outline-none cursor-default"
             tabindex="-1" aria-hidden="true">©</button>
@@ -960,14 +960,10 @@ async function fetchQuestionBank() {
             try {
                 result = await window.Firebase1685.loadBootstrap();
             } catch (fbErr) {
-                console.warn("[v1.6851] Firebase 題庫載入失敗，回退 GAS：", fbErr);
+                console.warn("[v1.69] Firebase 題庫載入失敗：", fbErr);
             }
         }
-        if (!result) {
-            const res = await fetch(GAS_URL);
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            result = await res.json();
-        }
+        if (!result) throw new Error("Firebase 題庫尚未啟用或尚未同步資料");
         if (result.status !== "success" || !result.topics?.length)
             throw new Error("題庫回傳格式不正確，或題庫為空");
 
@@ -1030,7 +1026,7 @@ async function fetchQuestionBank() {
             hide("ranking-skeleton");
             show("ranking-list");
             renderRankingSection(rankingData);
-            // v1.6851：登入頁排行優先使用 Firebase 快取，不再立即呼叫 GAS 補今日人數。
+            // v1.69：登入頁排行優先使用 Firebase 快取，不再立即呼叫 GAS 補今日人數。
             // 今日人數會在後台/排程同步快取時更新，避免手機入口被 GAS 排行拖慢。
         } else if (completionSettings.completionTopics?.length > 0) {
             // 快取不存在時回退到獨立呼叫
@@ -1094,7 +1090,7 @@ async function handleLogin() {
     show("topic-section");
     window._completionDetails = null;
     renderTopics();
-    window.Firebase1685?.flushQueue?.().catch(err => console.warn("[v1.6851] 暫存作答補同步失敗", err));
+    window.Firebase1685?.flushQueue?.().catch(err => console.warn("[v1.69] 暫存作答補同步失敗", err));
     if (completionSettings.completionTopics?.length > 0) {
         const summary = document.getElementById("my-completion-summary");
         if (summary) {
@@ -1290,7 +1286,7 @@ async function loadAndStartFlashcard(topic, skipSessionCheck = false) {
     }
 }
 
-// ★ 優先從 Firebase 讀題；失敗才回退 GAS
+// ★ v1.69：學生端題目來源固定為 Firebase；GAS 僅作為同步入口
 async function loadTopicQuestions(topic, flashcard) {
     let data = null;
     if (window.Firebase1685?.isEnabled?.()) {
@@ -1302,15 +1298,12 @@ async function loadTopicQuestions(topic, flashcard) {
                     : boot.questions.filter(q => (q.top || "未分類") === topic);
             }
         } catch (err) {
-            console.warn("[v1.6851] Firebase 題目讀取失敗，改用 GAS：", err);
+            console.warn("[v1.69] Firebase 題目讀取失敗：", err);
+            throw err;
         }
     }
 
-    if (!data) {
-        const res = await postGAS({ action: "getTopicQuestions", topic, flashcard: flashcard || false });
-        if (res.status !== "ok") throw new Error(res.message || "載入失敗");
-        data = res.data || [];
-    }
+    if (!data) throw new Error("Firebase 題庫尚未啟用或尚未同步資料");
 
     if (topic === "綜合練習") data = shuffle([...data]).slice(0, 30);
 
@@ -1357,9 +1350,11 @@ function prepareQuiz(sources) {
         questionType:   src.questionType || "",
         cogType:        src.cogType || "",  // ★ 認知類型
         userSelectedIndex:   null,
+        userSelectedText:    "",
         isCorrectlyAnswered: false,
         serverCorrectText:   "",
         serverExp:           "",
+        serverCorrectIndex:  -1,
     })));
     currentQuestionIndex = 0;
 
@@ -1432,6 +1427,7 @@ function handleOptionClick(clickedBtn, selectedIdx, qData) {
     });
     clickedBtn.classList.add("option-selected");
     qData.userSelectedIndex = selectedIdx; // ★ 只記錄，不送網路
+    qData.userSelectedText = qData.shuffledOpts[selectedIdx] || "";
     // ★ v1.67 計算本題用時
     qData.answerSec = qData._answerStartTime > 0
         ? Math.round((Date.now() - qData._answerStartTime) / 1000) : null;
@@ -1451,24 +1447,16 @@ function handleOptionClick(clickedBtn, selectedIdx, qData) {
 }
 
 // ══════════════════════════════════════════════
-//  5. 送出答案 → 批次判題（一次網路請求）
+//  5. 送出答案 → 本機判分 → 一次送出 Firebase
 // ══════════════════════════════════════════════
 async function submitQuiz() {
     hide("quiz-section");
     show("submitting-section");
-
-    // 整理送出格式（附上洗牌後選項，讓 GAS 回傳正確 index）
-    const answers = quizSession.map(q => ({
-        questionId:    q.id,
-        selectedText:  q.shuffledOpts[q.userSelectedIndex] ?? "未作答",
-        shuffledOpts:  q.shuffledOpts,  // ★ 送出洗牌後的選項順序
-    }));
+    document.querySelector("#submitting-section h2").textContent = "正在判分...";
+    document.querySelector("#submitting-section p").textContent  = "以 Firebase 題庫答案為準";
 
     try {
-        let res = judgeBatchLocally();
-        if (!res) {
-            res = await postGAS({ action: "batchJudge", answers });
-        }
+        const res = judgeBatchLocally();
         if (res.status !== "ok") throw new Error(res.message || "判題失敗");
 
         // 將判題結果寫回 quizSession
@@ -1479,7 +1467,7 @@ async function submitQuiz() {
             if (r) {
                 q.isCorrectlyAnswered = r.correct;
                 q.serverCorrectText   = r.correctText  || "";
-                q.serverCorrectIndex  = r.correctIndex ?? -1; // ★ GAS 回傳的正確 index
+                q.serverCorrectIndex  = r.correctIndex ?? -1; // ★ Firebase 題庫答案對應的正確 index
                 q.serverExp           = r.exp || "尚無解析";
                 if (r.correct) scoreCorrect++;
             }
@@ -1498,20 +1486,24 @@ async function submitQuiz() {
 
 function normalizeAnswerForCompare(value) {
     return String(value || "")
-        .replace(/^([1-4]|[A-D])[.\-、\s]*/i, "")
         .trim()
         .toLowerCase()
         .replace(/\s+/g, " ");
 }
 
 function judgeBatchLocally() {
-    if (!quizSession.every(q => q.ans && Array.isArray(q.shuffledOpts))) return null;
+    if (!quizSession.every(q => q.ans && Array.isArray(q.shuffledOpts))) {
+        throw new Error("題目缺少答案資料，請先同步 Firebase 題庫");
+    }
     const results = [];
+    const broken = [];
     quizSession.forEach(q => {
-        const selectedText = q.shuffledOpts[q.userSelectedIndex] ?? "未作答";
+        const selectedText = q.userSelectedText || q.shuffledOpts[q.userSelectedIndex] || "未作答";
         const correctNorm = normalizeAnswerForCompare(q.ans);
         const selectedNorm = normalizeAnswerForCompare(selectedText);
         const correctIndex = q.shuffledOpts.findIndex(opt => normalizeAnswerForCompare(opt) === correctNorm);
+        if (correctIndex === -1) broken.push(q.id || q.q);
+        q.userSelectedText = selectedText;
         results.push({
             questionId: q.id,
             correct: selectedNorm === correctNorm,
@@ -1520,6 +1512,7 @@ function judgeBatchLocally() {
             exp: q.exp || "尚無解析"
         });
     });
+    if (broken.length) throw new Error(`有 ${broken.length} 題的正確答案不在選項中，請檢查 Firebase 題庫`);
     return { status: "ok", source: "local", results };
 }
 
@@ -1563,15 +1556,15 @@ function showResults(scoreCorrect) {
         return;
     }
 
-    // 非同步送出成績與明細（不影響顯示速度）
-    document.getElementById("save-status").textContent = "正在同步成績至雲端...";
+    // 交卷後才一次送出 Firebase，答題中不產生讀寫
+    document.getElementById("save-status").textContent = "正在一次送出成績至 Firebase...";
     document.getElementById("save-status").className   = "text-sm text-blue-600 mb-4 font-medium";
 
     const details = quizSession.map(q => ({
         questionId:   q.id,
         questionText: q.q,
         topic:        q.top,
-        selectedText: q.shuffledOpts[q.userSelectedIndex] ?? "未作答",
+        selectedText: q.userSelectedText || q.shuffledOpts[q.userSelectedIndex] || "未作答",
         correctText:  q.serverCorrectText,
         isCorrect:    q.isCorrectlyAnswered,
         answerSec:    q.answerSec ?? null,  // ★ v1.67 每題作答秒數
@@ -1592,9 +1585,7 @@ function showResults(scoreCorrect) {
         ip: clientIP,
         details,
         isRetryMode
-    }, "save-status").then(res => {
-        if (res.status === "ok") loadCompletionRanking(true);
-    });
+    }, "save-status");
 }
 
 function renderReviewList() {
@@ -1605,7 +1596,7 @@ function renderReviewList() {
     quizSession.forEach((q, idx) => {
         const isOk = q.isCorrectlyAnswered;
         let optsHtml = '<div class="space-y-2 mb-4 pl-1">';
-        // ★ 直接用 GAS 回傳的 correctIndex，不做文字比對
+        // ★ 直接用本機判分得到的 correctIndex，不再交給 GAS 判分
         const correctIdx = q.serverCorrectIndex ?? -1;
         q.shuffledOpts.forEach((optText, optIdx) => {
             const isCorrectOpt = optIdx === correctIdx;
@@ -1619,12 +1610,12 @@ function renderReviewList() {
                 textCls = "text-green-700 font-semibold";
                 prefix  = `<span class="inline-block w-6 text-center text-green-600 mr-1">✓</span>`;
                 suffix  = isUserPick
-                    ? ` <span class="text-green-600 text-sm ml-2">(正確答案／你的作答)</span>`
+                    ? ` <span class="text-green-600 text-sm ml-2">(正確答案／本次選擇)</span>`
                     : ` <span class="text-green-600 text-sm ml-2">(正確答案)</span>`;
             } else if (isUserPick) {
                 textCls = "text-red-600 font-semibold";
                 prefix  = `<span class="inline-block w-6 text-center text-red-500 mr-1">✗</span>`;
-                suffix  = ` <span class="text-red-500 text-sm ml-2">(你的作答)</span>`;
+                suffix  = ` <span class="text-red-500 text-sm ml-2">(本次選擇)</span>`;
             }
             optsHtml += `<div class="${textCls} flex items-start"><div class="shrink-0">${prefix}</div><div>${optText}${suffix}</div></div>`;
         });
@@ -1739,15 +1730,16 @@ function fcSelectOption(clickedBtn, selectedOpt, q) {
     // 鎖定所有選項
     document.querySelectorAll(".fc-opt-btn").forEach(b => { b.onclick = null; });
 
-    const cleanSel  = selectedOpt.replace(/^([1-4]|[A-D])[.\-、\s]*/i,"").trim().toLowerCase().replace(/\s+/g," ");
-    const cleanCorr = (q.ans||"").replace(/^([1-4]|[A-D])[.\-、\s]*/i,"").trim().toLowerCase().replace(/\s+/g," ");
+    const cleanSel  = normalizeAnswerForCompare(selectedOpt);
+    const cleanCorr = normalizeAnswerForCompare(q.ans || "");
     const isCorrect = cleanSel === cleanCorr;
     const answerSec = q._answerStartTime > 0 ? Math.round((Date.now() - q._answerStartTime) / 1000) : null;
 
-    // ★ 直接找出正確選項的 index，不逐一文字比對
+    // ★ 直接找出正確選項的 index；不移除 A/B/C/D，避免 A型/B型 等答案被誤判
     const correctIndex = q.shuffledOpts.findIndex(opt =>
-        opt.replace(/^([1-4]|[A-D])[.\-、\s]*/i,"").trim().toLowerCase().replace(/\s+/g," ") === cleanCorr
+        normalizeAnswerForCompare(opt) === cleanCorr
     );
+    if (correctIndex === -1) console.warn("[v1.69] 閃卡正確答案不在選項中：", q.id || q.q, q.ans);
 
     document.querySelectorAll(".fc-opt-btn").forEach((b, i) => {
         if (i === correctIndex) {
@@ -2361,17 +2353,13 @@ async function loadWrongFcCount() {
     wfcQuestions = [];
 
     try {
-        // 逐一查詢各分類錯題後合併
-        const results = await Promise.all(
-            topics.map(topic => postGAS({ action: "getMyWrongQuestions", studentId, topic, hours }))
-        );
+        // 先補上本次測驗剛產生的錯題，再查 Firebase 歷史錯題。
+        const currentWrong = getCurrentSessionWrongFlashcards("").filter(q => topics.includes(q.top || "未分類"));
+        const firebaseWrong = await fetchWrongQuestionsFromFirebase({ topics, hours });
+
         // 合併去重（以 id 為 key）
         const qMap = new Map();
-        results.forEach(res => {
-            if (res.status === "ok") {
-                (res.questions || []).forEach(q => { if (!qMap.has(q.id)) qMap.set(q.id, q); });
-            }
-        });
+        [...currentWrong, ...firebaseWrong].forEach(q => { if (q.id && !qMap.has(q.id)) qMap.set(q.id, q); });
         let allWrong = shuffle([...qMap.values()]);
 
         // 題數上限
@@ -2414,7 +2402,42 @@ async function startWrongFcQuiz() {
 //  閃卡模式選擇
 // ══════════════════════════════════════════════
 let fcModalTopic   = "";
-let fcWrongQuestions = []; // 從 GAS 取得的歷史錯題
+let fcWrongQuestions = []; // 從 Firebase 取得的歷史錯題
+
+function normalizePracticeQuestion(item, idx = 0) {
+    return {
+        id: item.id || item.questionId || `Q_${idx}`,
+        top: item.top || item.topic || "未分類",
+        q: item.q || item.questionText || "",
+        options: Array.isArray(item.options) ? item.options : [],
+        color: item.color || "red",
+        isImage: !!item.isImage,
+        imgUrl: item.imgUrl || "",
+        questionType: item.questionType || "",
+        ans: item.ans || item.correctText || "",
+        exp: item.exp || item.explanation || "尚無解析",
+        cogType: item.cogType || ""
+    };
+}
+
+function getCurrentSessionWrongFlashcards(topic) {
+    if (!Array.isArray(quizSession) || !quizSession.length) return [];
+    return quizSession
+        .filter(q => q && q.isCorrectlyAnswered === false)
+        .filter(q => !topic || topic === "綜合練習" || (q.top || "未分類") === topic)
+        .map((q, idx) => normalizePracticeQuestion({
+            ...q,
+            options: Array.isArray(q.options) && q.options.length ? q.options : (q.shuffledOpts || []),
+            ans: q.serverCorrectText || q.ans,
+            exp: q.serverExp || q.exp
+        }, idx));
+}
+
+async function fetchWrongQuestionsFromFirebase({ topic = "", topics = null, hours = 0 } = {}) {
+    if (!window.Firebase1685?.loadWrongQuestions) throw new Error("Firebase 錯題功能尚未啟用");
+    const list = await window.Firebase1685.loadWrongQuestions(studentId, { topic, topics, hours });
+    return (list || []).map((q, idx) => normalizePracticeQuestion(q, idx));
+}
 
 function openFlashcardModal(topic) {
     fcModalTopic = topic;
@@ -2451,10 +2474,17 @@ function onFcDaysChange() {
         desc.textContent = "需要登入才能使用此功能";
         return;
     }
-    postGAS({ action: "getMyWrongQuestions", studentId, topic: fcModalTopic, hours })
+    const currentWrong = getCurrentSessionWrongFlashcards(fcModalTopic);
+    if (currentWrong.length) {
+        fcWrongQuestions = currentWrong;
+        desc.textContent = `本次測驗共有 ${fcWrongQuestions.length} 題錯題`;
+        btn.disabled = false;
+        return;
+    }
+
+    fetchWrongQuestionsFromFirebase({ topic: fcModalTopic, hours })
         .then(res => {
-            if (res.status === "ok") {
-                fcWrongQuestions = res.questions || [];
+                fcWrongQuestions = res || [];
                 if (fcWrongQuestions.length > 0) {
                     const label = getFcTimeLabel(val);
                     desc.textContent = `${label}內共 ${fcWrongQuestions.length} 題尚未答對`;
@@ -2465,7 +2495,6 @@ function onFcDaysChange() {
                     btn.disabled = true;
                     btn.classList.add("opacity-50");
                 }
-            }
         }).catch(() => {
             desc.textContent = "載入失敗，請重試";
         });
@@ -2627,13 +2656,13 @@ async function startComboQuiz() {
     show("submitting-section");
 
     try {
-        // 逐一載入各選定分類（或一次載入全部再篩選）
-        const res = await postGAS({ action: "getTopicQuestions", topic: "綜合練習", flashcard: false });
-        if (res.status !== "ok") throw new Error(res.message || "載入失敗");
+        if (!window.Firebase1685?.isEnabled?.()) throw new Error("Firebase 題庫尚未啟用");
+        const boot = await window.Firebase1685.loadBootstrap();
+        if (!boot?.questions?.length) throw new Error("Firebase 題庫尚未同步資料");
 
         // 篩選勾選的分類，再洗牌取指定題數
         const topicSet = new Set(selectedTopics);
-        const filtered = (res.data || []).filter(q => topicSet.has(q.top));
+        const filtered = (boot.questions || []).filter(q => topicSet.has(q.top));
         const picked   = shuffle([...filtered]).slice(0, count);
 
         if (!picked.length) {
@@ -3110,12 +3139,10 @@ function renderFilteredQuestions(list) {
                 const tc = r<60?"text-red-500":r<80?"text-yellow-500":"text-green-500";
                 // ★ 選項比例（純文字列表，由多到少排序，正確答案標綠色）
                 const optCounts   = q.optionCounts || {};
-                const correctText = (q.correctText || "").replace(/^([1-4]|[A-D])[.\-、\s]*/i,"").trim().toLowerCase();
+                const correctText = normalizeAnswerForCompare(q.correctText || "");
                 const optTotal    = q.total || 1;
                 // ★ 正確答案也做同樣清理，確保比對一致
-                const cleanCorrectText = (correctText || "")
-                    .replace(/^([1-4]|[A-D])[.\-、\s]*/i,"").trim().toLowerCase()
-                    .replace(/\s+/g," "); // 統一多餘空白
+                const cleanCorrectText = normalizeAnswerForCompare(correctText || "");
                 // ★ 過濾掉「未作答」，並按人次排序
                 const optEntries  = Object.entries(optCounts)
                     .filter(([opt]) => opt && opt !== "未作答")
@@ -3130,7 +3157,7 @@ function renderFilteredQuestions(list) {
                         ${optEntries.map(([opt, cnt], idx) => {
                             const pct      = Math.round((cnt / optTotal) * 100);
                             const label    = LABELS[idx] || (idx+1);
-                            const cleanOpt = opt.replace(/^([1-4]|[A-D])[.\-、\s]*/i,"").trim().toLowerCase().replace(/\s+/g," ");
+                            const cleanOpt = normalizeAnswerForCompare(opt);
                             // ★ 只標記一次正確答案，避免重複標記
                             const isCorrect = !correctMarked && cleanCorrectText && cleanOpt === cleanCorrectText;
                             if (isCorrect) correctMarked = true;
@@ -3569,53 +3596,21 @@ async function submitAttemptCloud(payload, statusElementId) {
         statusEl.className = cls || "text-sm text-blue-600 mb-4 font-medium";
     };
 
-    if (window.Firebase1685?.isEnabled?.()) {
-        const res = await window.Firebase1685.submitAttemptWithFallback(payload);
-        if (res.status === "ok") {
-            setStatus("✓ 成績已同步至 Firebase", "text-sm text-green-600 mb-4 font-medium");
-            return res;
-        }
-        if (res.status === "queued") {
-            setStatus("✓ 成績已暫存，稍後會自動補同步", "text-sm text-amber-600 mb-4 font-medium");
-            return res;
-        }
+    if (!window.Firebase1685?.isEnabled?.()) {
+        setStatus("Firebase 尚未啟用，成績未送出", "text-sm text-red-600 mb-4 font-medium");
+        return { status: "error", message: "Firebase 尚未啟用" };
     }
-
-    // Firebase 未啟用時才回退舊 GAS，確保 1.684 資料流仍可用。
-    try {
-        const scoreRes = await postGAS({
-            action:"submitScore",
-            studentId: payload.studentId,
-            name: payload.name,
-            topic: payload.topic,
-            mode: payload.mode,
-            attempt: payload.attempt,
-            score: payload.score,
-            correctCount: payload.correctCount,
-            wrongCount: payload.wrongCount,
-            duration: payload.duration,
-            token: payload.token,
-            ip: payload.ip
-        });
-        if (scoreRes.status === "kicked") {
-            showKicked();
-            return scoreRes;
-        }
-        postGAS({
-            action:"submitAnswerDetail",
-            studentId: payload.studentId,
-            name: payload.name,
-            mode: payload.mode,
-            attempt: payload.attempt,
-            details: payload.details,
-            token: payload.token
-        }).catch(() => {});
-        setStatus("✓ 成績已同步至 GAS 備援", "text-sm text-green-600 mb-4 font-medium");
-        return { status: "ok", source: "gas" };
-    } catch(e) {
-        setStatus("⚠ 成績同步失敗，請檢查網路", "text-sm text-red-600 mb-4 font-medium");
-        return { status: "error", message: e.message };
+    const res = await window.Firebase1685.submitAttemptWithFallback(payload);
+    if (res.status === "ok") {
+        setStatus("成績已一次送出至 Firebase", "text-sm text-green-600 mb-4 font-medium");
+        return res;
     }
+    if (res.status === "queued") {
+        setStatus("成績已暫存在本機，稍後會自動補送", "text-sm text-amber-600 mb-4 font-medium");
+        return res;
+    }
+    setStatus("成績同步狀態未知，請稍後確認", "text-sm text-amber-600 mb-4 font-medium");
+    return res;
 }
 // ── 重複登入報告 ──
 let dupLoginLoaded = false;

@@ -349,7 +349,7 @@
 <!-- ★ 教師後台入口：藏在頁面底部，兩個「©」中間那個才是觸發點 -->
 <footer class="text-center py-4 mt-auto select-none">
     <span class="text-gray-200 text-xs">© 題庫系統</span>
-    <span class="text-gray-200 text-xs ml-2" id="version-badge" title="後台 v1.6851 ／ 適配 GAS v9-684 + Firebase">v1.6851</span>
+    <span class="text-gray-200 text-xs ml-2" id="version-badge" title="後台 v1.69 ／ 適配 GAS v9-690 + Firebase">v1.69</span>
     <button onclick="tryOpenAdminModal()"
             class="text-gray-200 text-xs ml-px hover:text-gray-300 focus:outline-none cursor-default"
             tabindex="-1" aria-hidden="true">©</button>
@@ -940,7 +940,7 @@ let teacherData       = null;
 
 document.addEventListener('DOMContentLoaded', () => {
     fetchQuestionBank().then(() => {
-        document.title = "教師後台 - 題庫系統 v1.6851";
+        document.title = "教師後台 - 題庫系統 v1.69";
         setTimeout(() => {
             if (typeof openAdminModal === "function") openAdminModal();
         }, 250);
@@ -1021,7 +1021,7 @@ async function fetchQuestionBank() {
             hide("ranking-skeleton");
             show("ranking-list");
             renderRankingSection(rankingData);
-            // v1.6851：後台入口先使用快取，不讓 GAS 今日人數補齊拖慢開頁。
+            // v1.69：後台入口先使用快取，不讓 GAS 今日人數補齊拖慢開頁。
         } else if (completionSettings.completionTopics?.length > 0) {
             // 快取不存在時回退到獨立呼叫
             loadCompletionRanking(false);
@@ -1291,7 +1291,7 @@ async function loadTopicQuestions(topic, flashcard) {
                     : boot.questions.filter(q => (q.top || "未分類") === topic);
             }
         } catch (err) {
-            console.warn("[v1.6851] Firebase 題目讀取失敗，改用 GAS：", err);
+            console.warn("[v1.69] Firebase 題目讀取失敗，改用 GAS：", err);
         }
     }
 
@@ -1446,7 +1446,7 @@ async function submitQuiz() {
     hide("quiz-section");
     show("submitting-section");
 
-    // 整理送出格式（附上洗牌後選項，讓 GAS 回傳正確 index）
+    // 整理送出格式（附上洗牌後選項）
     const answers = quizSession.map(q => ({
         questionId:    q.id,
         selectedText:  q.shuffledOpts[q.userSelectedIndex] ?? "未作答",
@@ -1465,7 +1465,7 @@ async function submitQuiz() {
             if (r) {
                 q.isCorrectlyAnswered = r.correct;
                 q.serverCorrectText   = r.correctText  || "";
-                q.serverCorrectIndex  = r.correctIndex ?? -1; // ★ GAS 回傳的正確 index
+                q.serverCorrectIndex  = r.correctIndex ?? -1; // ★ 正確 index
                 q.serverExp           = r.exp || "尚無解析";
                 if (r.correct) scoreCorrect++;
             }
@@ -1480,6 +1480,13 @@ async function submitQuiz() {
         show("finish-btn-area");
         alert("送出失敗：" + err.message + "\n請檢查網路後重試");
     }
+}
+
+function normalizeAnswerForCompare(value) {
+    return String(value || "")
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, " ");
 }
 
 // ══════════════════════════════════════════════
@@ -1572,7 +1579,7 @@ function renderReviewList() {
     quizSession.forEach((q, idx) => {
         const isOk = q.isCorrectlyAnswered;
         let optsHtml = '<div class="space-y-2 mb-4 pl-1">';
-        // ★ 直接用 GAS 回傳的 correctIndex，不做文字比對
+        // ★ 直接用 correctIndex，不做文字比對
         const correctIdx = q.serverCorrectIndex ?? -1;
         q.shuffledOpts.forEach((optText, optIdx) => {
             const isCorrectOpt = optIdx === correctIdx;
@@ -1586,12 +1593,12 @@ function renderReviewList() {
                 textCls = "text-green-700 font-semibold";
                 prefix  = `<span class="inline-block w-6 text-center text-green-600 mr-1">✓</span>`;
                 suffix  = isUserPick
-                    ? ` <span class="text-green-600 text-sm ml-2">(正確答案／你的作答)</span>`
+                    ? ` <span class="text-green-600 text-sm ml-2">(正確答案／本次選擇)</span>`
                     : ` <span class="text-green-600 text-sm ml-2">(正確答案)</span>`;
             } else if (isUserPick) {
                 textCls = "text-red-600 font-semibold";
                 prefix  = `<span class="inline-block w-6 text-center text-red-500 mr-1">✗</span>`;
-                suffix  = ` <span class="text-red-500 text-sm ml-2">(你的作答)</span>`;
+                suffix  = ` <span class="text-red-500 text-sm ml-2">(本次選擇)</span>`;
             }
             optsHtml += `<div class="${textCls} flex items-start"><div class="shrink-0">${prefix}</div><div>${optText}${suffix}</div></div>`;
         });
@@ -1706,14 +1713,14 @@ function fcSelectOption(clickedBtn, selectedOpt, q) {
     // 鎖定所有選項
     document.querySelectorAll(".fc-opt-btn").forEach(b => { b.onclick = null; });
 
-    const cleanSel  = selectedOpt.replace(/^([1-4]|[A-D])[.\-、\s]*/i,"").trim().toLowerCase().replace(/\s+/g," ");
-    const cleanCorr = (q.ans||"").replace(/^([1-4]|[A-D])[.\-、\s]*/i,"").trim().toLowerCase().replace(/\s+/g," ");
+    const cleanSel  = normalizeAnswerForCompare(selectedOpt);
+    const cleanCorr = normalizeAnswerForCompare(q.ans || "");
     const isCorrect = cleanSel === cleanCorr;
     const answerSec = q._answerStartTime > 0 ? Math.round((Date.now() - q._answerStartTime) / 1000) : null;
 
     // ★ 直接找出正確選項的 index，不逐一文字比對
     const correctIndex = q.shuffledOpts.findIndex(opt =>
-        opt.replace(/^([1-4]|[A-D])[.\-、\s]*/i,"").trim().toLowerCase().replace(/\s+/g," ") === cleanCorr
+        normalizeAnswerForCompare(opt) === cleanCorr
     );
 
     document.querySelectorAll(".fc-opt-btn").forEach((b, i) => {
@@ -3078,11 +3085,10 @@ function renderFilteredQuestions(list) {
                 const tc = r<60?"text-red-500":r<80?"text-yellow-500":"text-green-500";
                 // ★ 選項比例（純文字列表，由多到少排序，正確答案標綠色）
                 const optCounts   = q.optionCounts || {};
-                const correctText = (q.correctText || "").replace(/^([1-4]|[A-D])[.\-、\s]*/i,"").trim().toLowerCase();
+                const correctText = normalizeAnswerForCompare(q.correctText || "");
                 const optTotal    = q.total || 1;
                 // ★ 正確答案也做同樣清理，確保比對一致
                 const cleanCorrectText = (correctText || "")
-                    .replace(/^([1-4]|[A-D])[.\-、\s]*/i,"").trim().toLowerCase()
                     .replace(/\s+/g," "); // 統一多餘空白
                 // ★ 過濾掉「未作答」，並按人次排序
                 const optEntries  = Object.entries(optCounts)
@@ -3098,7 +3104,7 @@ function renderFilteredQuestions(list) {
                         ${optEntries.map(([opt, cnt], idx) => {
                             const pct      = Math.round((cnt / optTotal) * 100);
                             const label    = LABELS[idx] || (idx+1);
-                            const cleanOpt = opt.replace(/^([1-4]|[A-D])[.\-、\s]*/i,"").trim().toLowerCase().replace(/\s+/g," ");
+                            const cleanOpt = normalizeAnswerForCompare(opt);
                             // ★ 只標記一次正確答案，避免重複標記
                             const isCorrect = !correctMarked && cleanCorrectText && cleanOpt === cleanCorrectText;
                             if (isCorrect) correctMarked = true;
