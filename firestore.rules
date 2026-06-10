@@ -1,0 +1,58 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function hasStudentId() {
+      return signedIn()
+        && request.resource.data.studentId is string
+        && request.resource.data.studentId.size() > 0;
+    }
+
+    match /system/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /questions/{questionId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /rankingCaches/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /students/{studentId} {
+      allow read, write: if false;
+    }
+
+    match /answerBatches/{batchId} {
+      allow create: if hasStudentId();
+      allow read, update, delete: if false;
+    }
+
+    match /answerDetails/{detailId} {
+      allow create: if hasStudentId();
+      allow read, update, delete: if false;
+    }
+
+    match /studentProgress/{progressId} {
+      allow create, update: if hasStudentId();
+      allow read, delete: if false;
+    }
+
+    match /wrongQuestions/{wrongId} {
+      allow create, update: if hasStudentId();
+      allow read, delete: if false;
+    }
+
+    match /offlineQueue/{queueId} {
+      allow create: if hasStudentId();
+      allow read, update, delete: if false;
+    }
+  }
+}

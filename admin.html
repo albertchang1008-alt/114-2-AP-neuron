@@ -349,8 +349,8 @@
 <!-- ★ 教師後台入口：藏在頁面底部，兩個「©」中間那個才是觸發點 -->
 <footer class="text-center py-4 mt-auto select-none">
     <span class="text-gray-200 text-xs">© 題庫系統</span>
-    <span class="text-gray-200 text-xs ml-2" id="version-badge" title="前端 v1.685 ／ 適配 GAS v9-684 + Firebase">v1.685</span>
-    <button onclick="location.href='admin.html'"
+    <span class="text-gray-200 text-xs ml-2" id="version-badge" title="後台 v1.685 ／ 適配 GAS v9-684 + Firebase">v1.685</span>
+    <button onclick="tryOpenAdminModal()"
             class="text-gray-200 text-xs ml-px hover:text-gray-300 focus:outline-none cursor-default"
             tabindex="-1" aria-hidden="true">©</button>
 </footer>
@@ -717,10 +717,16 @@
                 </div>
 
                 <!-- 儲存按鈕 -->
-                <button id="settings-save-btn" onclick="saveCompletionSettings()"
-                    class="bg-sky-500 hover:bg-sky-600 text-white font-bold px-8 py-3 rounded-xl transition">
-                    💾 儲存設定
-                </button>
+                <div class="flex flex-wrap items-center gap-3">
+                    <button id="settings-save-btn" onclick="saveCompletionSettings()"
+                        class="bg-sky-500 hover:bg-sky-600 text-white font-bold px-8 py-3 rounded-xl transition">
+                        💾 儲存設定
+                    </button>
+                    <button id="firebase-sync-btn" onclick="syncFirebaseV1685()"
+                        class="bg-emerald-500 hover:bg-emerald-600 text-white font-bold px-8 py-3 rounded-xl transition">
+                        🔥 同步到 Firebase
+                    </button>
+                </div>
                 <p id="settings-save-status" class="text-sm mt-3 font-medium hidden"></p>
             </div>
 
@@ -932,7 +938,14 @@ let progressChartInst = null;
 let topicChartInst    = null;
 let teacherData       = null;
 
-document.addEventListener('DOMContentLoaded', fetchQuestionBank);
+document.addEventListener('DOMContentLoaded', () => {
+    fetchQuestionBank().then(() => {
+        document.title = "教師後台 - 題庫系統 v1.685";
+        setTimeout(() => {
+            if (typeof openAdminModal === "function") openAdminModal();
+        }, 250);
+    });
+});
 document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible" && isLoggedIn) verifySessionOnce();
 });
@@ -943,19 +956,9 @@ document.addEventListener("visibilitychange", () => {
 async function fetchQuestionBank() {
     show("loading-section"); hide("error-section");
     try {
-        let result = null;
-        if (window.Firebase1685?.isEnabled?.()) {
-            try {
-                result = await window.Firebase1685.loadBootstrap();
-            } catch (fbErr) {
-                console.warn("[v1.685] Firebase 題庫載入失敗，回退 GAS：", fbErr);
-            }
-        }
-        if (!result) {
-            const res = await fetch(GAS_URL);
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            result = await res.json();
-        }
+        const res    = await fetch(GAS_URL);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const result = await res.json();
         if (result.status !== "success" || !result.topics?.length)
             throw new Error("題庫回傳格式不正確，或題庫為空");
 
@@ -1080,7 +1083,6 @@ async function handleLogin() {
     show("topic-section");
     window._completionDetails = null;
     renderTopics();
-    window.Firebase1685?.flushQueue?.().catch(err => console.warn("[v1.685] 暫存作答補同步失敗", err));
     if (completionSettings.completionTopics?.length > 0) {
         const summary = document.getElementById("my-completion-summary");
         if (summary) {
@@ -1451,10 +1453,7 @@ async function submitQuiz() {
     }));
 
     try {
-        let res = judgeBatchLocally();
-        if (!res) {
-            res = await postGAS({ action: "batchJudge", answers });
-        }
+        const res = await postGAS({ action: "batchJudge", answers });
         if (res.status !== "ok") throw new Error(res.message || "判題失敗");
 
         // 將判題結果寫回 quizSession
@@ -1480,33 +1479,6 @@ async function submitQuiz() {
         show("finish-btn-area");
         alert("送出失敗：" + err.message + "\n請檢查網路後重試");
     }
-}
-
-function normalizeAnswerForCompare(value) {
-    return String(value || "")
-        .replace(/^([1-4]|[A-D])[.\-、\s]*/i, "")
-        .trim()
-        .toLowerCase()
-        .replace(/\s+/g, " ");
-}
-
-function judgeBatchLocally() {
-    if (!quizSession.every(q => q.ans && Array.isArray(q.shuffledOpts))) return null;
-    const results = [];
-    quizSession.forEach(q => {
-        const selectedText = q.shuffledOpts[q.userSelectedIndex] ?? "未作答";
-        const correctNorm = normalizeAnswerForCompare(q.ans);
-        const selectedNorm = normalizeAnswerForCompare(selectedText);
-        const correctIndex = q.shuffledOpts.findIndex(opt => normalizeAnswerForCompare(opt) === correctNorm);
-        results.push({
-            questionId: q.id,
-            correct: selectedNorm === correctNorm,
-            correctText: q.ans || "",
-            correctIndex,
-            exp: q.exp || "尚無解析"
-        });
-    });
-    return { status: "ok", source: "local", results };
 }
 
 // ══════════════════════════════════════════════
@@ -1565,21 +1537,29 @@ function showResults(scoreCorrect) {
         cogType:      q.cogType || "",
     }));
 
-    submitAttemptCloud({
-        studentId, name: studentName,
-        topic: currentSelectedTopic,
-        mode: isRetryMode ? "錯題重做" : "完整測驗",
-        attempt: attemptCount,
-        score: scoreCalc,
-        correctCount: scoreCorrect,
-        wrongCount: wrong,
+    // ★ v1.68 先送 submitScore，若被踢出則顯示說明頁，不顯示成績
+    postGAS({ action:"submitScore", studentId, name:studentName,
+        topic:currentSelectedTopic, mode:isRetryMode?"錯題重做":"完整測驗",
+        attempt:attemptCount, score:scoreCalc, correctCount:scoreCorrect, wrongCount:wrong,
         duration: quizStartTime > 0 ? Math.round((Date.now() - quizStartTime) / 1000) : 0,
-        token: sessionToken,
-        ip: clientIP,
-        details,
-        isRetryMode
-    }, "save-status").then(res => {
-        if (res.status === "ok") loadCompletionRanking(true);
+        token: sessionToken, ip: clientIP
+    }).then(res => {
+        if (res.status === "kicked") {
+            // 被踢出：隱藏結果頁，顯示說明頁
+            showKicked();
+            return;
+        }
+        document.getElementById("save-status").textContent = "✓ 成績已同步至雲端";
+        document.getElementById("save-status").className   = "text-sm text-green-600 mb-4 font-medium";
+        loadCompletionRanking(true);
+        // 明細非同步送出（不影響顯示）
+        postGAS({ action:"submitAnswerDetail", studentId, name:studentName,
+            mode:isRetryMode?"錯題重做":"完整測驗", attempt:attemptCount, details,
+            token: sessionToken
+        }).catch(() => {});
+    }).catch(() => {
+        document.getElementById("save-status").textContent = "⚠ 成績同步失敗，請檢查網路";
+        document.getElementById("save-status").className   = "text-sm text-red-600 mb-4 font-medium";
     });
 }
 
@@ -1841,25 +1821,26 @@ function showFlashcardDone() {
 
     // ★ 送出成績（非錯題模式才送）
     if (studentId && total > 0 && !fcIsWrongMode) {
-        submitAttemptCloud({
-            studentId, name: studentName,
-            topic: fcTopic,
-            mode: "閃卡複習",
-            attempt: fcAttempt,
-            score,
-            correctCount: correct,
-            wrongCount: wrong,
-            duration,
-            token: sessionToken,
-            ip: clientIP,
-            details: fcAnswerLog,
-            isRetryMode: false
+        postGAS({
+            action: "submitScore", studentId, name: studentName,
+            topic: fcTopic, mode: "閃卡複習", attempt: fcAttempt,
+            score, correctCount: correct, wrongCount: wrong, duration,
+            token: sessionToken, ip: clientIP
         }).then(res => {
-            if (res.status === "ok") {
+            if (res.status === "kicked") {
+                showKicked();
+            } else {
+                // ★ 成績送出後更新完成度 + 觸發排行背景更新
                 if (completionSettings.completionTopics?.length > 0) loadMyCompletion();
-                loadCompletionRanking(true);
+                loadCompletionRanking(true);  // 補齊今日練習人數
             }
-        });
+        }).catch(() => {});
+
+        postGAS({
+            action: "submitAnswerDetail", studentId, name: studentName,
+            mode: "閃卡複習", attempt: fcAttempt, details: fcAnswerLog,
+            token: sessionToken
+        }).catch(() => {});
 
         fcAnswerLog = [];
     }
@@ -3290,6 +3271,39 @@ async function saveCompletionSettings() {
     }
 }
 
+async function syncFirebaseV1685() {
+    const btn = document.getElementById("firebase-sync-btn");
+    const status = document.getElementById("settings-save-status");
+    const oldText = btn ? btn.textContent : "";
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = "同步中...";
+    }
+    try {
+        const res = await postGAS({ action: "syncFirebaseV1685" });
+        if (res.status === "needs_config") {
+            status.textContent = "Firebase 尚未完成 GAS 屬性設定：請確認 FIREBASE_PROJECT_ID、FIREBASE_CLIENT_EMAIL、FIREBASE_PRIVATE_KEY。";
+            status.className = "text-sm mt-3 font-medium text-amber-600";
+            status.classList.remove("hidden");
+            return;
+        }
+        if (res.status !== "ok") throw new Error(res.message || "同步失敗");
+        const c = res.counts || {};
+        status.textContent = `✓ Firebase 同步完成：題目 ${c.questions || 0} 筆、學生 ${c.students || 0} 筆、分類 ${c.topics || 0} 個。`;
+        status.className = "text-sm mt-3 font-medium text-green-600";
+        status.classList.remove("hidden");
+    } catch(e) {
+        status.textContent = "Firebase 同步失敗：" + e.message;
+        status.className = "text-sm mt-3 font-medium text-red-500";
+        status.classList.remove("hidden");
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = oldText || "🔥 同步到 Firebase";
+        }
+    }
+}
+
 let detailStatsLoaded  = false;
 let detailStatsLoading = false;
 let analysisCacheLoaded = false;
@@ -3545,63 +3559,6 @@ async function postGAS(obj) {
         body: JSON.stringify(obj)
     });
     return await res.json();
-}
-
-async function submitAttemptCloud(payload, statusElementId) {
-    const statusEl = statusElementId ? document.getElementById(statusElementId) : null;
-    const setStatus = (text, cls) => {
-        if (!statusEl) return;
-        statusEl.textContent = text;
-        statusEl.className = cls || "text-sm text-blue-600 mb-4 font-medium";
-    };
-
-    if (window.Firebase1685?.isEnabled?.()) {
-        const res = await window.Firebase1685.submitAttemptWithFallback(payload);
-        if (res.status === "ok") {
-            setStatus("✓ 成績已同步至 Firebase", "text-sm text-green-600 mb-4 font-medium");
-            return res;
-        }
-        if (res.status === "queued") {
-            setStatus("✓ 成績已暫存，稍後會自動補同步", "text-sm text-amber-600 mb-4 font-medium");
-            return res;
-        }
-    }
-
-    // Firebase 未啟用時才回退舊 GAS，確保 1.684 資料流仍可用。
-    try {
-        const scoreRes = await postGAS({
-            action:"submitScore",
-            studentId: payload.studentId,
-            name: payload.name,
-            topic: payload.topic,
-            mode: payload.mode,
-            attempt: payload.attempt,
-            score: payload.score,
-            correctCount: payload.correctCount,
-            wrongCount: payload.wrongCount,
-            duration: payload.duration,
-            token: payload.token,
-            ip: payload.ip
-        });
-        if (scoreRes.status === "kicked") {
-            showKicked();
-            return scoreRes;
-        }
-        postGAS({
-            action:"submitAnswerDetail",
-            studentId: payload.studentId,
-            name: payload.name,
-            mode: payload.mode,
-            attempt: payload.attempt,
-            details: payload.details,
-            token: payload.token
-        }).catch(() => {});
-        setStatus("✓ 成績已同步至 GAS 備援", "text-sm text-green-600 mb-4 font-medium");
-        return { status: "ok", source: "gas" };
-    } catch(e) {
-        setStatus("⚠ 成績同步失敗，請檢查網路", "text-sm text-red-600 mb-4 font-medium");
-        return { status: "error", message: e.message };
-    }
 }
 // ── 重複登入報告 ──
 let dupLoginLoaded = false;
