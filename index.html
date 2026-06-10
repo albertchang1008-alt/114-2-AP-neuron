@@ -1010,8 +1010,10 @@ async function fetchQuestionBank() {
                 passScore:        result.rankingCache.passScore,
                 completionTopics: result.rankingCache.completionTopics,
                 ranking:          result.rankingCache.ranking || [],
-                todayTotal:       null,   // doGet 快取不含今日資料，由 getCompletionRanking 補
-                todayByClass:     {}
+                todayTotal:       result.rankingCache.todayTotal ?? 0,
+                todayByClass:     result.rankingCache.todayByClass || {},
+                todayDate:        result.rankingCache.todayDate || "",
+                todayUpdatedAt:   result.rankingCache.todayUpdatedAt || result.rankingCache.updatedAtText || ""
             };
             hide("ranking-skeleton");
             show("ranking-list");
