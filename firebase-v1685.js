@@ -6,7 +6,7 @@
   var db = null;
   var auth = null;
   var boot = null;
-  var queueKey = "quiz_v1685_firebase_queue";
+  var queueKey = "quiz_v169_firebase_queue";
 
   function enabled() {
     var c = cfg.firebaseConfig || {};
@@ -79,13 +79,13 @@
       var s = await docPath(c.settings || "system/main").get();
       if (s.exists) settings = s.data() || {};
     } catch (err) {
-      console.warn("[v1.6851] Firebase 設定讀取失敗，略過：", err);
+      console.warn("[v1.69] Firebase 設定讀取失敗，略過：", err);
     }
     try {
       var r = await docPath(c.homeRanking || "rankingCaches/home").get();
       if (r.exists) rankingCache = r.data() || null;
     } catch (err) {
-      console.warn("[v1.6851] Firebase 排行讀取失敗，略過：", err);
+      console.warn("[v1.69] Firebase 排行讀取失敗，略過：", err);
     }
 
     boot = {
@@ -165,7 +165,7 @@
       settingsVersion: payload.settingsVersion || "",
       createdAt: nowField(),
       clientCreatedAt: new Date().toISOString(),
-      source: "firebase-v1.6851"
+      source: "firebase-v1.69"
     };
     var details = Array.isArray(payload.details) ? payload.details : [];
     var writer = db.batch();
@@ -191,12 +191,12 @@
         cogType: d.cogType || "",
         createdAt: nowField(),
         clientCreatedAt: new Date().toISOString(),
-        source: "firebase-v1.6851"
+        source: "firebase-v1.69"
       };
       writer.set(db.collection(c.answerDetails || "answerDetails").doc(detailId), detail, { merge: true });
 
       var progressId = safeDocId(batch.studentId + "_" + qid);
-      writer.set(db.collection("studentProgress").doc(progressId), {
+      writer.set(db.collection(c.studentProgress || "studentProgress").doc(progressId), {
         studentId: batch.studentId,
         name: batch.name,
         email: email,
@@ -217,7 +217,7 @@
 
       var wrongId = progressId;
       if (!detail.isCorrect) {
-        writer.set(db.collection("wrongQuestions").doc(wrongId), {
+        writer.set(db.collection(c.wrongQuestions || "wrongQuestions").doc(wrongId), {
           studentId: batch.studentId,
           name: batch.name,
           email: email,
@@ -227,12 +227,13 @@
           correctText: detail.correctText,
           selectedText: detail.selectedText,
           lastWrongAt: nowField(),
+          clientCreatedAt: new Date().toISOString(),
           lastBatchId: batchId,
           active: true,
-          source: "firebase-v1.6851"
+          source: "firebase-v1.69"
         }, { merge: true });
       } else {
-        writer.set(db.collection("wrongQuestions").doc(wrongId), {
+        writer.set(db.collection(c.wrongQuestions || "wrongQuestions").doc(wrongId), {
           studentId: batch.studentId,
           email: email,
           questionId: qid,
@@ -250,7 +251,7 @@
     try {
       return await submitAttempt(payload);
     } catch (err) {
-      console.warn("[v1.6851] Firebase 作答寫入失敗，已暫存：", err);
+      console.warn("[v1.69] Firebase 作答寫入失敗，已暫存：", err);
       enqueue(payload);
       return { status: "queued", message: err.message };
     }
@@ -275,12 +276,62 @@
     return { status: "ok", flushed: flushed, remaining: remain.length };
   }
 
+  function parseClientTime(value) {
+    if (!value) return null;
+    if (typeof value.toDate === "function") {
+      var d = value.toDate();
+      if (d.getTime() <= 0 || d.getFullYear() <= 1970) return new Date();
+      return d;
+    }
+    if (value.seconds !== undefined) {
+      var d2 = new Date(value.seconds * 1000);
+      if (d2.getTime() <= 0 || d2.getFullYear() <= 1970) return new Date();
+      return d2;
+    }
+    var t = new Date(value);
+    if (isNaN(t.getTime())) return null;
+    if (t.getTime() <= 0 || t.getFullYear() <= 1970) return new Date();
+    return t;
+  }
+
+  async function loadWrongQuestions(studentId, options) {
+    if (!init()) throw new Error("Firebase 尚未啟用");
+    await ensureSignedIn();
+    var opts = options || {};
+    var c = cfg.collections || {};
+    var hours = Number(opts.hours) || 0;
+    var topics = Array.isArray(opts.topics) ? opts.topics : (opts.topic ? [opts.topic] : []);
+    var topicSet = {};
+    topics.filter(Boolean).forEach(function (t) { topicSet[t] = true; });
+    var cutoff = hours > 0 ? Date.now() - hours * 60 * 60 * 1000 : 0;
+    var bootData = await loadBootstrap();
+    var questionMap = {};
+    (bootData && bootData.questions || []).forEach(function (q) { questionMap[q.id] = q; });
+
+    var snap = await db.collection(c.wrongQuestions || "wrongQuestions")
+      .where("studentId", "==", String(studentId || ""))
+      .get();
+
+    var out = [];
+    snap.forEach(function (doc) {
+      var w = doc.data() || {};
+      if (!w.active) return;
+      if (topics.length && !topicSet[w.topic || "未分類"]) return;
+      var lastWrongAt = parseClientTime(w.lastWrongAt) || parseClientTime(w.clientCreatedAt);
+      if (cutoff && lastWrongAt && lastWrongAt.getTime() < cutoff) return;
+      var q = questionMap[w.questionId];
+      if (q && q.id && q.q) out.push(q);
+    });
+    return out;
+  }
+
   window.Firebase1685 = {
     init: init,
     isEnabled: init,
     loadBootstrap: loadBootstrap,
     submitAttempt: submitAttempt,
     submitAttemptWithFallback: submitAttemptWithFallback,
+    loadWrongQuestions: loadWrongQuestions,
     flushQueue: flushQueue,
     ensureSignedIn: ensureSignedIn,
     queueCount: function () { return readQueue().length; }
