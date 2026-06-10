@@ -20,6 +20,16 @@
       ? window.firebase.app()
       : window.firebase.initializeApp(cfg.firebaseConfig);
     db = window.firebase.firestore(app);
+    
+    // 啟用離線快取，大幅提升第二次開啟網頁的載入速度
+    try {
+      db.enablePersistence({ synchronizeTabs: true }).catch(function(err) {
+        console.warn("Firestore 離線快取啟用失敗，代碼：", err.code);
+      });
+    } catch (e) {
+      console.warn("瀏覽器不支援離線快取：", e.message);
+    }
+    
     auth = window.firebase.auth(app);
     return true;
   }
@@ -146,6 +156,8 @@
     var c = cfg.collections || {};
     var batchId = payload.batchId || ("B_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8));
     var email = currentUserEmail();
+    var details = Array.isArray(payload.details) ? payload.details : [];
+    
     var batch = {
       batchId: batchId,
       studentId: payload.studentId || "",
@@ -165,73 +177,51 @@
       settingsVersion: payload.settingsVersion || "",
       createdAt: nowField(),
       clientCreatedAt: new Date().toISOString(),
-      source: "firebase-v1.69"
+      source: "firebase-v1.69",
+      detailsJson: JSON.stringify(details.map(function (d, idx) {
+        return {
+          questionId: d.questionId || ("Q_" + idx),
+          questionText: d.questionText || "",
+          topic: d.topic || "",
+          selectedText: d.selectedText || "",
+          correctText: d.correctText || "",
+          isCorrect: !!d.isCorrect,
+          answerSec: d.answerSec === null || d.answerSec === undefined ? null : Number(d.answerSec),
+          questionType: d.questionType || "",
+          cogType: d.cogType || ""
+        };
+      }))
     };
-    var details = Array.isArray(payload.details) ? payload.details : [];
+    
     var writer = db.batch();
+    var opCount = 0;
+    
     writer.set(db.collection(c.answerBatches || "answerBatches").doc(batchId), batch, { merge: true });
-    details.forEach(function (d, idx) {
+    opCount++;
+    
+    for (var idx = 0; idx < details.length; idx++) {
+      var d = details[idx];
       var qid = d.questionId || ("Q_" + idx);
-      var detailId = safeDocId(batchId + "_" + qid + "_" + idx);
-      var detail = {
-        batchId: batchId,
-        studentId: batch.studentId,
-        name: batch.name,
-        email: email,
-        mode: batch.mode,
-        attempt: batch.attempt,
-        questionId: qid,
-        questionText: d.questionText || "",
-        topic: d.topic || "",
-        selectedText: d.selectedText || "",
-        correctText: d.correctText || "",
-        isCorrect: !!d.isCorrect,
-        answerSec: d.answerSec === null || d.answerSec === undefined ? null : Number(d.answerSec),
-        questionType: d.questionType || "",
-        cogType: d.cogType || "",
-        createdAt: nowField(),
-        clientCreatedAt: new Date().toISOString(),
-        source: "firebase-v1.69"
-      };
-      writer.set(db.collection(c.answerDetails || "answerDetails").doc(detailId), detail, { merge: true });
-
       var progressId = safeDocId(batch.studentId + "_" + qid);
-      writer.set(db.collection(c.studentProgress || "studentProgress").doc(progressId), {
-        studentId: batch.studentId,
-        name: batch.name,
-        email: email,
-        questionId: qid,
-        topic: detail.topic,
-        questionType: detail.questionType,
-        cogType: detail.cogType,
-        lastBatchId: batchId,
-        lastMode: batch.mode,
-        lastIsCorrect: detail.isCorrect,
-        lastAnswerSec: detail.answerSec,
-        lastAnsweredAt: nowField(),
-        updatedAt: nowField(),
-        answerCount: window.firebase.firestore.FieldValue.increment(1),
-        correctCount: window.firebase.firestore.FieldValue.increment(detail.isCorrect ? 1 : 0),
-        wrongCount: window.firebase.firestore.FieldValue.increment(detail.isCorrect ? 0 : 1)
-      }, { merge: true });
-
       var wrongId = progressId;
-      if (!detail.isCorrect) {
+      
+      if (!d.isCorrect) {
         writer.set(db.collection(c.wrongQuestions || "wrongQuestions").doc(wrongId), {
           studentId: batch.studentId,
           name: batch.name,
           email: email,
           questionId: qid,
-          questionText: detail.questionText,
-          topic: detail.topic,
-          correctText: detail.correctText,
-          selectedText: detail.selectedText,
+          questionText: d.questionText || "",
+          topic: d.topic || "",
+          correctText: d.correctText || "",
+          selectedText: d.selectedText || "",
           lastWrongAt: nowField(),
           clientCreatedAt: new Date().toISOString(),
           lastBatchId: batchId,
           active: true,
           source: "firebase-v1.69"
         }, { merge: true });
+        opCount++;
       } else {
         writer.set(db.collection(c.wrongQuestions || "wrongQuestions").doc(wrongId), {
           studentId: batch.studentId,
@@ -241,9 +231,19 @@
           masteredAt: nowField(),
           lastBatchId: batchId
         }, { merge: true });
+        opCount++;
       }
-    });
-    await writer.commit();
+      
+      if (opCount >= 400) {
+        await writer.commit();
+        writer = db.batch();
+        opCount = 0;
+      }
+    }
+    
+    if (opCount > 0) {
+      await writer.commit();
+    }
     return { status: "ok", batchId: batchId, writtenDetails: details.length };
   }
 
