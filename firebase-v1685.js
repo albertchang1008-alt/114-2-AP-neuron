@@ -79,13 +79,13 @@
       var s = await docPath(c.settings || "system/main").get();
       if (s.exists) settings = s.data() || {};
     } catch (err) {
-      console.warn("[v1.685] Firebase 設定讀取失敗，略過：", err);
+      console.warn("[v1.6851] Firebase 設定讀取失敗，略過：", err);
     }
     try {
       var r = await docPath(c.homeRanking || "rankingCaches/home").get();
       if (r.exists) rankingCache = r.data() || null;
     } catch (err) {
-      console.warn("[v1.685] Firebase 排行讀取失敗，略過：", err);
+      console.warn("[v1.6851] Firebase 排行讀取失敗，略過：", err);
     }
 
     boot = {
@@ -165,7 +165,7 @@
       settingsVersion: payload.settingsVersion || "",
       createdAt: nowField(),
       clientCreatedAt: new Date().toISOString(),
-      source: "firebase-v1.685"
+      source: "firebase-v1.6851"
     };
     var details = Array.isArray(payload.details) ? payload.details : [];
     var writer = db.batch();
@@ -191,7 +191,7 @@
         cogType: d.cogType || "",
         createdAt: nowField(),
         clientCreatedAt: new Date().toISOString(),
-        source: "firebase-v1.685"
+        source: "firebase-v1.6851"
       };
       writer.set(db.collection(c.answerDetails || "answerDetails").doc(detailId), detail, { merge: true });
 
@@ -229,7 +229,7 @@
           lastWrongAt: nowField(),
           lastBatchId: batchId,
           active: true,
-          source: "firebase-v1.685"
+          source: "firebase-v1.6851"
         }, { merge: true });
       } else {
         writer.set(db.collection("wrongQuestions").doc(wrongId), {
@@ -250,7 +250,7 @@
     try {
       return await submitAttempt(payload);
     } catch (err) {
-      console.warn("[v1.685] Firebase 作答寫入失敗，已暫存：", err);
+      console.warn("[v1.6851] Firebase 作答寫入失敗，已暫存：", err);
       enqueue(payload);
       return { status: "queued", message: err.message };
     }

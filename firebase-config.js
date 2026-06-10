@@ -1,4 +1,4 @@
-// Firebase v1.685 設定檔
+// Firebase v1.6851 設定檔
 // 1. 到 Firebase Console 建立 Web App。
 // 2. 將 Firebase SDK config 貼到 firebaseConfig。
 // 3. 將 enabled 改成 true 後，學生端會優先讀 Firebase；失敗時仍會回退 GAS。

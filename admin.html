@@ -349,7 +349,7 @@
 <!-- ★ 教師後台入口：藏在頁面底部，兩個「©」中間那個才是觸發點 -->
 <footer class="text-center py-4 mt-auto select-none">
     <span class="text-gray-200 text-xs">© 題庫系統</span>
-    <span class="text-gray-200 text-xs ml-2" id="version-badge" title="後台 v1.685 ／ 適配 GAS v9-684 + Firebase">v1.685</span>
+    <span class="text-gray-200 text-xs ml-2" id="version-badge" title="後台 v1.6851 ／ 適配 GAS v9-684 + Firebase">v1.6851</span>
     <button onclick="tryOpenAdminModal()"
             class="text-gray-200 text-xs ml-px hover:text-gray-300 focus:outline-none cursor-default"
             tabindex="-1" aria-hidden="true">©</button>
@@ -940,7 +940,7 @@ let teacherData       = null;
 
 document.addEventListener('DOMContentLoaded', () => {
     fetchQuestionBank().then(() => {
-        document.title = "教師後台 - 題庫系統 v1.685";
+        document.title = "教師後台 - 題庫系統 v1.6851";
         setTimeout(() => {
             if (typeof openAdminModal === "function") openAdminModal();
         }, 250);
@@ -1019,8 +1019,7 @@ async function fetchQuestionBank() {
             hide("ranking-skeleton");
             show("ranking-list");
             renderRankingSection(rankingData);
-            // 背景補齊今日練習人數
-            loadCompletionRanking(true);
+            // v1.6851：後台入口先使用快取，不讓 GAS 今日人數補齊拖慢開頁。
         } else if (completionSettings.completionTopics?.length > 0) {
             // 快取不存在時回退到獨立呼叫
             loadCompletionRanking(false);
@@ -1290,7 +1289,7 @@ async function loadTopicQuestions(topic, flashcard) {
                     : boot.questions.filter(q => (q.top || "未分類") === topic);
             }
         } catch (err) {
-            console.warn("[v1.685] Firebase 題目讀取失敗，改用 GAS：", err);
+            console.warn("[v1.6851] Firebase 題目讀取失敗，改用 GAS：", err);
         }
     }
 

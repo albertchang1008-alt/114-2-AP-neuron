@@ -1,8 +1,9 @@
 // ╔══════════════════════════════════════════════════════════════╗
-// ║      Google Apps Script — 題庫系統  v9-685                   ║
-// ║      對應前端版本：quiz_final v1.685                         ║
+// ║      Google Apps Script — 題庫系統  v9-6851                  ║
+// ║      對應前端版本：quiz_final v1.6851                        ║
 // ║                                                              ║
 // ║  更新紀錄：                                                   ║
+// ║  v9-6851 - Firebase 同步增加 rankingCaches/home，首頁排行走快取
 // ║  v9-685 - 新增 Firebase 同步；題庫/設定可推送到 Firestore
 // ║         學生名單雜湊改依表頭讀取，避免欄位順序造成登入失敗
 // ║  v9-684 - 重複登入只踢舊視窗、新視窗保持有效；新增分析快取
@@ -121,7 +122,7 @@ function doGet(e) {
 }
 
 // ─────────────────────────────────────────────
-// Firebase v1.685 同步：Google Sheet → Firestore 快取
+// Firebase v1.6851 同步：Google Sheet → Firestore 快取
 // ─────────────────────────────────────────────
 function normalizeAnswerTextV1685(rawAns, opts) {
   var raw = rawAns === null || rawAns === undefined ? "" : rawAns.toString().trim();
@@ -223,6 +224,7 @@ function buildFirebasePayloadV1685() {
   var questions = readQuestionsForFirebaseV1685(ss);
   var students = readStudentsForFirebaseV1685(ss);
   var settings = readSettings(ss);
+  var rankingCache = buildRankingCacheForFirebaseV1685(ss);
   var classMap = {};
   students.forEach(function(s) { if (s.className) classMap[s.className] = true; });
   var allClassList = Object.keys(classMap).sort(function(a, b) { return a.localeCompare(b, "zh-TW"); });
@@ -239,10 +241,23 @@ function buildFirebasePayloadV1685() {
       questionBankVersion: questions.length ? questions[0].questionBankVersion : "",
       updatedAtText: localNow()
     },
+    rankingCache: rankingCache,
     questions: questions,
     students: students,
     counts: { questions: questions.length, students: students.length, topics: topics.length, classes: allClassList.length }
   };
+}
+
+function buildRankingCacheForFirebaseV1685(ss) {
+  var cached = getRankingCacheProps(ss);
+  if (!cached) return null;
+  var todayCache = readTodayPracticeCache(ss);
+  cached.todayTotal = todayCache.todayTotal;
+  cached.todayByClass = todayCache.todayByClass;
+  cached.todayDate = todayCache.todayDate;
+  cached.todayUpdatedAt = todayCache.updatedAt;
+  cached.updatedAtText = localNow();
+  return cached;
 }
 
 function handleGetFirebaseBootstrap(payload) {
@@ -331,6 +346,9 @@ function handleSyncFirebaseV1685(payload) {
   var token = firebaseAccessTokenV1685();
   var writes = [];
   writes.push({ update: { name: firestoreDocNameV1685(projectId, "system", "main"), fields: firebaseFieldsV1685(data.settings) } });
+  if (data.rankingCache) {
+    writes.push({ update: { name: firestoreDocNameV1685(projectId, "rankingCaches", "home"), fields: firebaseFieldsV1685(data.rankingCache) } });
+  }
   data.questions.forEach(function(q) {
     writes.push({ update: { name: firestoreDocNameV1685(projectId, "questions", q.id), fields: firebaseFieldsV1685(q) } });
   });
