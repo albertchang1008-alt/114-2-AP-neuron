@@ -2196,7 +2196,7 @@ function renderRankingSection(data) {
         </div>
         <div style="text-align:right;font-size:10px;color:#94a3b8;margin-top:5px;display:flex;justify-content:flex-end;align-items:center;gap:4px;">
             <span>🕒</span>
-            <span>更新時間：${data.updatedAt ? data.updatedAt.substring(5, 16) : "未知"}</span>
+            <span>更新時間：${(data.todayUpdatedAt || data.updatedAtText || data.updatedAt) ? (data.todayUpdatedAt || data.updatedAtText || data.updatedAt).substring(5, 16) : "未知"}</span>
         </div>
     </div>`;
 
