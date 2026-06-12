@@ -154,6 +154,102 @@
     writeQueue(items);
   }
 
+  async function resolveCompletionSettings(payload) {
+    var passScore = Number(payload.passScore || payload.completionPassScore || 0);
+    var completionTopics = Array.isArray(payload.completionTopics) ? payload.completionTopics.slice() : [];
+    if (passScore && completionTopics.length) return { passScore: passScore, completionTopics: completionTopics };
+    try {
+      var bootData = await loadBootstrap();
+      var settings = (bootData && bootData.completionSettings) || {};
+      if (!passScore) passScore = Number(settings.passScore || 80);
+      if (!completionTopics.length && Array.isArray(settings.completionTopics)) completionTopics = settings.completionTopics.slice();
+    } catch (err) {
+      // 作答寫入不應因為設定讀取失敗而中斷。
+    }
+    return { passScore: passScore || 80, completionTopics: completionTopics };
+  }
+
+  function summarizeCurrentAttemptByTopic(batch, details) {
+    var groups = {};
+    details.forEach(function(d) {
+      var topic = d.topic || batch.topic || "未分類";
+      if (!groups[topic]) groups[topic] = { topic: topic, correct: 0, total: 0, totalSec: 0, secCount: 0 };
+      groups[topic].total += 1;
+      if (d.isCorrect) groups[topic].correct += 1;
+      if (d.answerSec !== null && d.answerSec !== undefined && !isNaN(Number(d.answerSec))) {
+        groups[topic].totalSec += Number(d.answerSec);
+        groups[topic].secCount += 1;
+      }
+    });
+
+    if (batch.topic && batch.topic !== "綜合練習") {
+      if (!groups[batch.topic]) groups[batch.topic] = { topic: batch.topic, correct: batch.correctCount, total: batch.correctCount + batch.wrongCount, totalSec: 0, secCount: 0 };
+      groups[batch.topic].score = batch.score;
+      if (batch.duration && (batch.correctCount + batch.wrongCount) > 0) {
+        groups[batch.topic].avgSec = Math.round(batch.duration / (batch.correctCount + batch.wrongCount));
+      }
+    }
+
+    return Object.keys(groups).map(function(topic) {
+      var g = groups[topic];
+      var score = g.score !== undefined ? Number(g.score) : (g.total > 0 ? Math.round((g.correct / g.total) * 100) : 0);
+      var avgSec = g.avgSec !== undefined ? g.avgSec : (g.secCount > 0 ? Math.round(g.totalSec / g.secCount) : null);
+      return { topic: topic, score: score, avgSec: avgSec };
+    });
+  }
+
+  function mergeStudentProgress(existing, batch, settings, attemptSummaries) {
+    var current = existing || {};
+    var detailMap = {};
+    (Array.isArray(current.details) ? current.details : []).forEach(function(d) {
+      if (d && d.topic) detailMap[d.topic] = {
+        topic: d.topic,
+        best: d.best === undefined ? null : d.best,
+        passed: !!d.passed,
+        avgSec: d.avgSec === undefined ? null : d.avgSec,
+        lastScore: d.lastScore === undefined ? null : d.lastScore,
+        lastAnsweredAtText: d.lastAnsweredAtText || ""
+      };
+    });
+
+    var completionTopics = settings.completionTopics || [];
+    completionTopics.forEach(function(topic) {
+      if (!detailMap[topic]) detailMap[topic] = { topic: topic, best: null, passed: false, avgSec: null, lastScore: null, lastAnsweredAtText: "" };
+    });
+
+    attemptSummaries.forEach(function(s) {
+      if (!s.topic || s.topic === "綜合練習") return;
+      if (!detailMap[s.topic]) {
+        detailMap[s.topic] = { topic: s.topic, best: null, passed: false, avgSec: null, lastScore: null, lastAnsweredAtText: "" };
+      }
+      var d = detailMap[s.topic];
+      d.lastScore = s.score;
+      d.best = d.best === null || d.best === undefined ? s.score : Math.max(Number(d.best) || 0, s.score);
+      d.passed = (Number(d.best) || 0) >= settings.passScore;
+      if (s.avgSec !== null && s.avgSec !== undefined) d.avgSec = s.avgSec;
+      d.lastAnsweredAtText = new Date().toISOString();
+    });
+
+    var orderedTopics = completionTopics.length ? completionTopics : Object.keys(detailMap).sort(function(a, b) { return a.localeCompare(b, "zh-TW"); });
+    var details = orderedTopics.map(function(topic) {
+      return detailMap[topic] || { topic: topic, best: null, passed: false, avgSec: null, lastScore: null, lastAnsweredAtText: "" };
+    });
+
+    return {
+      studentId: batch.studentId,
+      name: batch.name,
+      passScore: settings.passScore,
+      completionTopics: orderedTopics,
+      details: details,
+      lastBatchId: batch.batchId,
+      lastTopic: batch.topic,
+      lastScore: batch.score,
+      updatedAt: nowField(),
+      updatedAtText: new Date().toISOString(),
+      source: "firebase-v1.691-progress"
+    };
+  }
+
   async function submitAttempt(payload) {
     if (!init()) throw new Error("Firebase 尚未啟用");
     await ensureSignedIn();
@@ -247,6 +343,22 @@
         writer = db.batch();
         opCount = 0;
       }
+    }
+
+    if (!batch.isRetryMode && batch.studentId) {
+      var settings = await resolveCompletionSettings(payload);
+      var progressRef = db.collection(c.studentProgress || "studentProgress").doc(batch.studentId);
+      var existingProgress = {};
+      try {
+        var progressSnap = await progressRef.get();
+        if (progressSnap.exists) existingProgress = progressSnap.data() || {};
+      } catch (err) {
+        // 沒讀到舊摘要時，仍可用本次成績建立新摘要。
+      }
+      var attemptSummaries = summarizeCurrentAttemptByTopic(batch, details);
+      var progressDoc = mergeStudentProgress(existingProgress, batch, settings, attemptSummaries);
+      writer.set(progressRef, progressDoc, { merge: true });
+      opCount++;
     }
     
     if (opCount > 0) {

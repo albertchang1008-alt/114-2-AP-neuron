@@ -1646,7 +1646,9 @@ function showResults(scoreCorrect) {
         token: sessionToken,
         ip: clientIP,
         details,
-        isRetryMode
+        isRetryMode,
+        passScore: completionSettings?.passScore || 80,
+        completionTopics: completionSettings?.completionTopics || []
     }, "save-status");
 
     // ★ v1.691 樂觀更新 (Optimistic Update) 本地進度快取，考完立刻看見分數與達標變化
@@ -1939,7 +1941,9 @@ function showFlashcardDone() {
             token: sessionToken,
             ip: clientIP,
             details: fcAnswerLog,
-            isRetryMode: false
+            isRetryMode: false,
+            passScore: completionSettings?.passScore || 80,
+            completionTopics: completionSettings?.completionTopics || []
         }).then(res => {
             if (res.status === "ok") {
                 if (completionSettings.completionTopics?.length > 0) loadMyCompletion();
