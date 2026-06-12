@@ -42,7 +42,8 @@ service cloud.firestore {
 
     match /studentProgress/{progressId} {
       allow create, update: if hasStudentId();
-      allow read, delete: if false;
+      allow read: if true;
+      allow delete: if false;
     }
 
     match /wrongQuestions/{wrongId} {
@@ -51,6 +52,15 @@ service cloud.firestore {
         && resource.data.studentId is string
         && resource.data.studentId.size() > 0;
       allow delete: if false;
+    }
+
+    match /studentAttempts/{studentId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /loginStates/{studentId} {
+      allow read, write: if true;
     }
 
     match /offlineQueue/{queueId} {

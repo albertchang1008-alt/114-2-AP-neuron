@@ -177,7 +177,7 @@
       settingsVersion: payload.settingsVersion || "",
       createdAt: nowField(),
       clientCreatedAt: new Date().toISOString(),
-      source: "firebase-v1.69",
+      source: "firebase-v1.691",
       detailsJson: JSON.stringify(details.map(function (d, idx) {
         return {
           questionId: d.questionId || ("Q_" + idx),
@@ -219,7 +219,7 @@
           clientCreatedAt: new Date().toISOString(),
           lastBatchId: batchId,
           active: true,
-          source: "firebase-v1.69"
+          source: "firebase-v1.691"
         }, { merge: true });
         opCount++;
       } else {

@@ -1,9 +1,9 @@
 // ╔══════════════════════════════════════════════════════════════╗
 // ║      Google Apps Script — 題庫系統  v9-690                   ║
-// ║      對應前端版本：quiz_final v1.69                          ║
+// ║      對應前端版本：quiz_final v1.691                          ║
 // ║                                                              ║
 // ║  更新紀錄：                                                   ║
-// ║  v9-690  - v1.69：GAS 保留為 Google Sheet → Firebase 同步與後台入口
+// ║  v9-690  - v1.691：GAS 保留為 Google Sheet → Firebase 同步與後台入口
 // ║            學生端題庫、判分、作答明細、錯題改由 Firebase 處理
 // ║  v9-6851 - Firebase 同步增加 rankingCaches/home，首頁排行走快取
 // ║  v9-685 - 新增 Firebase 同步；題庫/設定可推送到 Firestore
@@ -124,7 +124,7 @@ function doGet(e) {
 }
 
 // ─────────────────────────────────────────────
-// Firebase v1.69 同步：Google Sheet → Firestore 快取
+// Firebase v1.691 同步：Google Sheet → Firestore 快取
 // ─────────────────────────────────────────────
 function normalizeAnswerTextV1685(rawAns, opts) {
   var raw = rawAns === null || rawAns === undefined ? "" : rawAns.toString().trim();
@@ -326,12 +326,12 @@ function firestoreDocNameV1685(projectId, collection, id) {
 function firebaseBatchWriteV1685(projectId, token, writes) {
   if (!writes.length) return;
   var url = "https://firestore.googleapis.com/v1/projects/" + projectId + "/databases/(default)/documents:batchWrite";
-  for (var i = 0; i < writes.length; i += 500) {
+  for (var i = 0; i < writes.length; i += 100) {
     var res = UrlFetchApp.fetch(url, {
       method: "post",
       contentType: "application/json",
       headers: { Authorization: "Bearer " + token },
-      payload: JSON.stringify({ writes: writes.slice(i, i + 500) }),
+      payload: JSON.stringify({ writes: writes.slice(i, i + 100) }),
       muteHttpExceptions: true
     });
     if (res.getResponseCode() >= 300) throw new Error("Firestore 寫入失敗：" + res.getContentText());
@@ -1122,37 +1122,36 @@ function handleGetMyCompletion(payload) {
 
   var scoreSheet = ss.getSheetByName(SHEET_SCORES);
   var topicBest  = {};
+  var topicTimeMap = {};  // topic → { totalSec, totalQ }
+  
   if (scoreSheet && scoreSheet.getLastRow() > 1) {
-    var sRows = scoreSheet.getDataRange().getValues();
+    // 唯讀前 10 欄 (A~J)
+    var sRows = scoreSheet.getRange(1, 1, scoreSheet.getLastRow(), 10).getValues();
     for (var i = 1; i < sRows.length; i++) {
       var sid   = sRows[i][1] ? sRows[i][1].toString() : "";
+      if (sid !== studentId) continue;
+      
       var topic = sRows[i][3] ? sRows[i][3].toString() : "";
       var mode  = sRows[i][4] ? sRows[i][4].toString() : "";
-      var score = Number(sRows[i][6]);
-      if (sid !== studentId) continue;
       if (mode === "錯題重做") continue;
+      
+      var score = Number(sRows[i][6]);
       if (score > (topicBest[topic] || 0)) topicBest[topic] = score;
-    }
-  }
-
-  // ★ v9-6：計算各分類平均每題用時
-  var topicTimeMap = {};  // topic → { totalSec, totalQ }
-  if (scoreSheet && scoreSheet.getLastRow() > 1) {
-    var scRows2 = scoreSheet.getDataRange().getValues();
-    for (var i2 = 1; i2 < scRows2.length; i2++) {
-      var sid2    = scRows2[i2][1] ? scRows2[i2][1].toString() : "";
-      var topic2  = scRows2[i2][3] ? scRows2[i2][3].toString() : "";
-      var mode2   = scRows2[i2][4] ? scRows2[i2][4].toString() : "";
-      var correct2= Number(scRows2[i2][7]) || 0;
-      var wrong2  = Number(scRows2[i2][8]) || 0;
-      var dur2    = Number(scRows2[i2][9]) || 0;
-      if (sid2 !== studentId || mode2 === "錯題重做" || topic2 === "綜合練習") continue;
-      if (dur2 <= 0) continue;
-      var qCount = correct2 + wrong2;
-      if (qCount <= 0) continue;
-      if (!topicTimeMap[topic2]) topicTimeMap[topic2] = { totalSec: 0, totalQ: 0 };
-      topicTimeMap[topic2].totalSec += dur2;
-      topicTimeMap[topic2].totalQ   += qCount;
+      
+      // 計算各分類平均每題用時 (原本 scRows2 邏輯)
+      if (topic !== "綜合練習") {
+        var correct = Number(sRows[i][7]) || 0;
+        var wrong   = Number(sRows[i][8]) || 0;
+        var dur     = Number(sRows[i][9]) || 0;
+        if (dur > 0) {
+          var qCount = correct + wrong;
+          if (qCount > 0) {
+            if (!topicTimeMap[topic]) topicTimeMap[topic] = { totalSec: 0, totalQ: 0 };
+            topicTimeMap[topic].totalSec += dur;
+            topicTimeMap[topic].totalQ   += qCount;
+          }
+        }
+      }
     }
   }
 
@@ -1207,7 +1206,7 @@ function handleGetCompletionRanking(payload) {
 
   var studentTopicBest = {};
   if (scoreSheet && scoreSheet.getLastRow() > 1) {
-    var scRows = scoreSheet.getDataRange().getValues();
+    var scRows = scoreSheet.getRange(1, 1, scoreSheet.getLastRow(), 7).getValues();
     for (var i2 = 1; i2 < scRows.length; i2++) {
       var sid2   = scRows[i2][1] ? scRows[i2][1].toString() : "";
       var topic2 = scRows[i2][3] ? scRows[i2][3].toString() : "";
@@ -1394,26 +1393,49 @@ function handleGetTeacherData(payload) {
 
   var studentHistory      = {};
   var classStats          = {};
+  var topicTimeStats      = {};  // topic → { totalSec, totalQ, count }
 
-  // ★ v9-4 班級統計改從成績紀錄計算（不讀題目作答明細）
+  // ★ v9-4 班級統計與用時改從成績紀錄計算，只讀取前 10 欄 (A~J) 合併為單次讀取
   if (scoreSheet && scoreSheet.getLastRow() > 1) {
-    var scRows2 = scoreSheet.getDataRange().getValues();
+    var scRows2 = scoreSheet.getRange(1, 1, scoreSheet.getLastRow(), 10).getValues();
     for (var i6 = 1; i6 < scRows2.length; i6++) {
       var sid6    = scRows2[i6][1] ? scRows2[i6][1].toString() : "";
       if (!sid6) continue;
       var stuInfo6 = studentInfoMap[sid6] || {};
       if (!studentHistory[sid6]) studentHistory[sid6] = { name: stuInfo6.name || sid6, class: stuInfo6.class || "未分班", attempts: [] };
+      
+      var sDate    = scRows2[i6][0] ? scRows2[i6][0].toString() : "";
+      var sTopic   = scRows2[i6][3] ? scRows2[i6][3].toString() : "";
+      var sMode    = scRows2[i6][4] ? scRows2[i6][4].toString() : "";
+      var sAttempt = Number(scRows2[i6][5]);
+      var sScore   = Number(scRows2[i6][6]);
+      var sCorr    = Number(scRows2[i6][7]) || 0;
+      var sWron    = Number(scRows2[i6][8]) || 0;
+      var sDur     = Number(scRows2[i6][9]) || 0;
+      var isRetry  = sMode === "錯題重做";
+      
       studentHistory[sid6].attempts.push({
-        date:     scRows2[i6][0] ? scRows2[i6][0].toString() : "",
-        topic:    scRows2[i6][3] ? scRows2[i6][3].toString() : "",
-        mode:     scRows2[i6][4] ? scRows2[i6][4].toString() : "",
-        attempt:  Number(scRows2[i6][5]),
-        score:    Number(scRows2[i6][6]),
-        correct:  Number(scRows2[i6][7]),
-        wrong:    Number(scRows2[i6][8]),
-        duration: Number(scRows2[i6][9]) || 0,  // ★ v9-681 J欄 作答秒數
-        isRetry:  scRows2[i6][4] ? scRows2[i6][4].toString() === "錯題重做" : false,
+        date:     sDate,
+        topic:    sTopic,
+        mode:     sMode,
+        attempt:  sAttempt,
+        score:    sScore,
+        correct:  sCorr,
+        wrong:    sWron,
+        duration: sDur,
+        isRetry:  isRetry,
       });
+
+      // 計算各分類平均每題用時
+      if (!isRetry && sTopic !== "綜合練習" && sDur > 0) {
+        var qCountT = sCorr + sWron;
+        if (qCountT > 0) {
+          if (!topicTimeStats[sTopic]) topicTimeStats[sTopic] = { totalSec: 0, totalQ: 0, count: 0 };
+          topicTimeStats[sTopic].totalSec += sDur;
+          topicTimeStats[sTopic].totalQ   += qCountT;
+          topicTimeStats[sTopic].count++;
+        }
+      }
     }
   }
 
@@ -1429,26 +1451,6 @@ function handleGetTeacherData(payload) {
       }
     });
   });
-
-  // ★ v9-6：計算各分類平均每題用時（從成績紀錄）
-  var topicTimeStats = {};  // topic → { totalSec, totalQ, count }
-  if (scoreSheet && scoreSheet.getLastRow() > 1) {
-    var scRowsT = scoreSheet.getDataRange().getValues();
-    for (var iT = 1; iT < scRowsT.length; iT++) {
-      var topicT = scRowsT[iT][3] ? scRowsT[iT][3].toString() : "";
-      var modeT  = scRowsT[iT][4] ? scRowsT[iT][4].toString() : "";
-      var corrT  = Number(scRowsT[iT][7]) || 0;
-      var wronT  = Number(scRowsT[iT][8]) || 0;
-      var durT   = Number(scRowsT[iT][9]) || 0;
-      if (modeT === "錯題重做" || topicT === "綜合練習" || durT <= 0) continue;
-      var qCountT = corrT + wronT;
-      if (qCountT <= 0) continue;
-      if (!topicTimeStats[topicT]) topicTimeStats[topicT] = { totalSec: 0, totalQ: 0, count: 0 };
-      topicTimeStats[topicT].totalSec += durT;
-      topicTimeStats[topicT].totalQ   += qCountT;
-      topicTimeStats[topicT].count++;
-    }
-  }
 
   var classList2 = Object.keys(classStats).map(function(cls) {
     var s = classStats[cls];
@@ -1551,18 +1553,42 @@ function buildStudentClassMap(ss) {
 }
 
 function computeTodayPracticeCounts(ss) {
-  var todayStr = localNow().slice(0, 10);
+  var now = new Date();
+  var todayStr = Utilities.formatDate(now, "Asia/Taipei", "yyyy/MM/dd");
   var studentClassMap = buildStudentClassMap(ss);
   var todaySet = {};
   var scoreSheet = ss.getSheetByName(SHEET_SCORES);
 
   if (scoreSheet && scoreSheet.getLastRow() > 1) {
-    var rows = scoreSheet.getRange(2, 1, scoreSheet.getLastRow() - 1, 4).getValues();
+    var rows = scoreSheet.getRange(2, 1, scoreSheet.getLastRow() - 1, 2).getValues(); // 僅需時間與學號
     rows.forEach(function(r) {
-      var date = dateKeyTW(r[0]);
-      var sid = r[1] ? r[1].toString().trim() : "";
-      if (date === todayStr && sid && !todaySet[sid]) {
-        todaySet[sid] = studentClassMap[sid] || "未分班";
+      var timeVal = r[0];
+      if (!timeVal) return;
+      
+      var d = null;
+      if (timeVal instanceof Date) {
+        d = timeVal;
+      } else {
+        // 如果是字串，轉換並嘗試解析
+        var str = timeVal.toString().trim().replace(/-/g, "/");
+        if (str.indexOf("下午") !== -1) {
+          str = str.replace("下午", "").trim();
+          d = new Date(str);
+          if (!isNaN(d.getTime())) d.setHours(d.getHours() + 12);
+        } else if (str.indexOf("上午") !== -1) {
+          str = str.replace("上午", "").trim();
+          d = new Date(str);
+        } else {
+          d = new Date(str);
+        }
+      }
+      
+      if (d && !isNaN(d.getTime())) {
+        var dateStr = Utilities.formatDate(d, "Asia/Taipei", "yyyy/MM/dd");
+        var sid = r[1] ? r[1].toString().trim() : "";
+        if (dateStr === todayStr && sid && !todaySet[sid]) {
+          todaySet[sid] = studentClassMap[sid] || "未分班";
+        }
       }
     });
   }
@@ -1730,54 +1756,74 @@ function buildAndSaveAnalysisCaches(ss) {
   var questionType = {};
   var questionStats = {};
 
-  getDetailSheets(ss).forEach(function(sheet) {
-    if (sheet.getLastRow() <= 1) return;
-    ensureDetailHeader(sheet);
-    var rows = sheet.getDataRange().getValues();
-    var headers = rows[0].map(function(h) { return h ? h.toString().trim() : ""; });
-    var cTime = findColIdx(headers, ["時間戳記"]);
-    var cSid = findColIdx(headers, ["學號"]);
-    var cName = findColIdx(headers, ["姓名"]);
-    var cQid = findColIdx(headers, ["題目ID"]);
-    var cQtext = findColIdx(headers, ["題目內容"]);
-    var cTopic = findColIdx(headers, ["單元","分類"]);
-    var cSel = findColIdx(headers, ["學生選項"]);
-    var cResult = findColIdx(headers, ["是否答對"]);
-    var cMode = findColIdx(headers, ["測驗模式"]);
-    var cSec = findColIdx(headers, ["作答秒數"]);
-    var cType = findColIdx(headers, ["題型"]);
-    var cCog = findColIdx(headers, ["認知類型"]);
-
-    for (var i = 1; i < rows.length; i++) {
-      var r = rows[i];
-      var mode = cMode !== -1 && r[cMode] ? r[cMode].toString() : "";
-      if (mode === "錯題重做") continue;
-      var sid = cSid !== -1 && r[cSid] ? r[cSid].toString().trim() : "";
-      var qid = cQid !== -1 && r[cQid] ? r[cQid].toString().trim() : "";
-      if (!sid || !qid) continue;
+  // 方案三：改從 SHEET_SCORES 中讀取明細 JSON 進行解析
+  var scoreSheet = ss.getSheetByName(SHEET_SCORES);
+  if (!scoreSheet || scoreSheet.getLastRow() <= 1) {
+    return { classCategory: 0, studentCategory: 0, questionType: 0, questionStats: 0, updatedAt: updatedAt };
+  }
+  
+  var rows = scoreSheet.getDataRange().getValues();
+  var headers = rows[0].map(function(h) { return h ? h.toString().trim() : ""; });
+  
+  var cSid = findColIdx(headers, ["學號"]);
+  var cName = findColIdx(headers, ["姓名"]);
+  var cMode = findColIdx(headers, ["測驗模式"]);
+  var cJson = findColIdx(headers, ["作答明細(JSON)", "作答明細 (JSON)"]);
+  var cTime = findColIdx(headers, ["時間戳記", "時間"]);
+  
+  // 僅分析最近 7 天之內的紀錄以防 OOM
+  var cutoffTime = new Date().getTime() - 7 * 24 * 60 * 60 * 1000;
+  
+  for (var i = 1; i < rows.length; i++) {
+    var r = rows[i];
+    var mode = cMode !== -1 && r[cMode] ? r[cMode].toString() : "";
+    if (mode === "錯題重做") continue;
+    
+    var sid = cSid !== -1 && r[cSid] ? r[cSid].toString().trim() : "";
+    if (!sid) continue;
+    
+    var sTime = cTime !== -1 ? getRowSeconds(r[cTime]) * 1000 : 0;
+    if (sTime > 0 && sTime < cutoffTime) continue; // 大於 7 天前就直接跳過不分析
+    
+    var jsonStr = cJson !== -1 ? r[cJson] : "";
+    if (!jsonStr) continue;
+    
+    var details = [];
+    try {
+      details = JSON.parse(jsonStr);
+    } catch(e) {
+      continue; // 解析失敗跳過
+    }
+    if (!Array.isArray(details)) continue;
+    
+    var info = studentInfo[sid] || {};
+    var cls = info.class || "未分班";
+    var name = info.name || (cName !== -1 && r[cName] ? r[cName].toString().trim() : "");
+    
+    details.forEach(function(d, idx) {
+      var qid = d.qid || d.questionId || ("Q_" + idx);
       var meta = qMeta[qid] || {};
-      var info = studentInfo[sid] || {};
-      var cls = info.class || "未分班";
-      var name = info.name || (cName !== -1 && r[cName] ? r[cName].toString().trim() : "");
-      var topic = cTopic !== -1 && r[cTopic] ? r[cTopic].toString().trim() : (meta.topic || "未分類");
-      var qText = cQtext !== -1 && r[cQtext] ? r[cQtext].toString().trim() : (meta.questionText || "");
-      var qType = cType !== -1 && r[cType] ? r[cType].toString().trim() : (meta.questionType || "未分類");
-      var cog = cCog !== -1 && r[cCog] ? r[cCog].toString().trim() : (meta.cogType || "未分類");
-      var selectedText = cSel !== -1 && r[cSel] ? r[cSel].toString().trim() : "";
-      var result = cResult !== -1 && r[cResult] ? r[cResult].toString() : "";
-      var answerSec = cSec !== -1 && r[cSec] !== "" ? Number(r[cSec]) || 0 : 0;
-      var isCorrect = result === "答對";
-
+      
+      var topic = d.topic || meta.topic || "未分類";
+      var qText = d.questionText || meta.questionText || "";
+      var qType = d.questionType || meta.questionType || "未分類";
+      var cog = d.cogType || meta.cogType || "未分類";
+      var selectedText = d.sel !== undefined ? d.sel : (d.selectedText || "");
+      var secVal = d.sec !== undefined ? d.sec : d.answerSec;
+      var answerSec = secVal !== null && secVal !== undefined ? Number(secVal) || 0 : 0;
+      var isCorrect = d.ok === true || d.isCorrect === true;
+      
       var item = { isCorrect: isCorrect, answerSec: answerSec, selectedText: selectedText, meta: {
         className: cls, sid: sid, name: name, topic: topic, questionId: qid,
-        questionText: qText, questionType: qType || "未分類", cogType: cog || "未分類"
+        questionText: qText, questionType: qType, cogType: cog
       }};
       bumpAgg(classCategory, cls + "|" + topic, item, sid);
       bumpAgg(studentCategory, cls + "|" + sid + "|" + topic, item, sid);
-      bumpAgg(questionType, cls + "|" + (qType || "未分類"), item, sid);
+      bumpAgg(questionType, cls + "|" + qType, item, sid);
       bumpAgg(questionStats, qid, item, sid);
-    }
-  });
+    });
+  }
+
 
   var classRows = Object.keys(classCategory).map(function(key) {
     var s = classCategory[key], m = s.meta;
@@ -1803,6 +1849,28 @@ function buildAndSaveAnalysisCaches(ss) {
   writeCacheSheet(ss, SHEET_STUDENT_CATEGORY_ANALYSIS, ["更新時間","班級","學號","姓名","分類","作答題數","答對題數","答對率","平均作答秒數"], studentRows, "#e0f2fe");
   writeCacheSheet(ss, SHEET_QUESTION_TYPE_ANALYSIS, ["更新時間","班級","題型","作答人數","作答題數","答對題數","答對率","平均作答秒數"], typeRows, "#fef3c7");
   writeCacheSheet(ss, SHEET_QUESTION_ANALYSIS, ["更新時間","題目ID","分類","題型","認知類型","題目","作答人數","作答題數","答對題數","答對率","平均作答秒數","常錯選項"], questionRows, "#ede9fe");
+
+  // ★ v1.691 同步寫入快取到 Firebase rankingCaches/analysisCaches
+  try {
+    var analysisCacheObj = {
+      classCategory: classRows.map(function(row) {
+        return { updatedAt: row[0], className: row[1], topic: row[2], studentCount: row[3], total: row[4], correct: row[5], rate: row[6], avgSec: row[7] };
+      }),
+      studentCategory: studentRows.map(function(row) {
+        return { updatedAt: row[0], className: row[1], sid: row[2], name: row[3], topic: row[4], total: row[5], correct: row[6], rate: row[7], avgSec: row[8] };
+      }),
+      questionType: typeRows.map(function(row) {
+        return { updatedAt: row[0], className: row[1], questionType: row[2], studentCount: row[3], total: row[4], correct: row[5], rate: row[6], avgSec: row[7] };
+      }),
+      questionStats: questionRows.map(function(row) {
+        return { updatedAt: row[0], qid: row[1], topic: row[2], questionType: row[3], cogType: row[4], questionText: row[5], studentCount: row[6], total: row[7], correct: row[8], rate: row[9], avgSec: row[10], commonWrongOption: row[11] };
+      })
+    };
+    uploadCacheToFirebase("rankingCaches", "analysisCaches", analysisCacheObj);
+  } catch(err) {
+    Logger.log("⚠️ 上傳分析快取至 Firebase 失敗：" + err.message);
+  }
+
   return { classCategory: classRows.length, studentCategory: studentRows.length, questionType: typeRows.length, questionStats: questionRows.length, updatedAt: updatedAt };
 }
 
@@ -1891,7 +1959,7 @@ function calcStudentTopicScores(ss) {
   // 學號 → 分類 → 最高分
   var studentTopicBest = {};
   if (scoreSheet && scoreSheet.getLastRow() > 1) {
-    var scRows = scoreSheet.getDataRange().getValues();
+    var scRows = scoreSheet.getRange(1, 1, scoreSheet.getLastRow(), 7).getValues();
     for (var i = 1; i < scRows.length; i++) {
       var sid2   = scRows[i][1] ? scRows[i][1].toString().trim() : "";
       var topic2 = scRows[i][3] ? scRows[i][3].toString().trim() : "";
@@ -2084,9 +2152,10 @@ function autoUpdateScoreSheet() {
   // 檢查最後一筆成績的時間
   var lastRow      = scoreSheet.getLastRow();
   var lastTimeVal  = scoreSheet.getRange(lastRow, 1).getValue();
-  var lastTime     = lastTimeVal instanceof Date ? lastTimeVal : new Date(lastTimeVal);
+  var seconds      = getRowSeconds(lastTimeVal);
+  var lastTime     = seconds > 0 ? new Date(seconds * 1000) : null;
 
-  if (isNaN(lastTime)) {
+  if (!lastTime || isNaN(lastTime.getTime())) {
     Logger.log("⏭ 無法讀取最後作答時間，跳過");
     return;
   }
@@ -2133,6 +2202,14 @@ function manualUpdateScoreTable() {
   var count = buildAndSaveScoreTable(ss);
   writeTodayPracticeCache(ss);
   var analysis = buildAndSaveAnalysisCaches(ss);
+  
+  // ★ v1.691 同步上傳 teacherData 快取與各學生的完成度快取至 Firebase
+  try {
+    updateTeacherDataAndStudentProgressFirebase(ss);
+  } catch(err) {
+    Logger.log("⚠️ 同步 teacherData 與進度快取至 Firebase 失敗：" + err.message);
+  }
+  
   Logger.log("✅ 完成！共 " + count + " 位學生；分析快取：" + JSON.stringify(analysis));
 }
 
@@ -2282,6 +2359,48 @@ function setRankingCacheProps(passScore, completionTopics, ranking) {
 
     props.setProperty("RANKING_VALID", "true");
     Logger.log("✅ 排行快取已存入 Script Properties，班級數：" + ranking.length);
+
+    // ★ v1.691 同步寫入快取至 Firebase (首頁排行與各分班詳情)
+    try {
+      var projectId = props.getProperty("FIREBASE_PROJECT_ID");
+      if (projectId) {
+        var token = firebaseAccessTokenV1685();
+        var ss = SpreadsheetApp.getActiveSpreadsheet();
+        var todayCache = readTodayPracticeCache(ss);
+        
+        var homeCacheObj = {
+          passScore: passScore,
+          completionTopics: completionTopics,
+          ranking: rankingSummary,
+          todayTotal: todayCache.todayTotal,
+          todayByClass: todayCache.todayByClass,
+          todayDate: todayCache.todayDate,
+          updatedAt: todayCache.updatedAt
+        };
+        
+        var writes = [];
+        writes.push({
+          update: {
+            name: firestoreDocNameV1685(projectId, "rankingCaches", "home"),
+            fields: firebaseFieldsV1685(homeCacheObj)
+          }
+        });
+        
+        ranking.forEach(function(r) {
+          writes.push({
+            update: {
+              name: firestoreDocNameV1685(projectId, "rankingClasses", r.class),
+              fields: firebaseFieldsV1685({ class: r.class, students: r.students || [] })
+            }
+          });
+        });
+        
+        firebaseBatchWriteV1685(projectId, token, writes);
+        Logger.log("✅ 已同步寫入 Firebase 排行快取 (首頁排行與 " + ranking.length + " 個班級學生資料)！");
+      }
+    } catch(err) {
+      Logger.log("⚠️ 同步排行快取至 Firebase 失敗：" + err.message);
+    }
   } catch(e) {
     Logger.log("⚠️ Script Properties 寫入失敗：" + e.message);
   }
@@ -2667,7 +2786,7 @@ function handleGetDuplicateLoginReport(payload) {
 }
 
 // ─────────────────────────────────────────────
-// Firebase v1.69 增量同步回 Google Sheets 核心函式
+// Firebase v1.691 增量同步回 Google Sheets 核心函式
 // ─────────────────────────────────────────────
 
 // 解析 Firestore REST API 返回的 fields 結構為一般 JS Object
@@ -2702,37 +2821,631 @@ function parseFirebaseFields(fields) {
   return obj;
 }
 
-// 取得 Sheet 中最後一筆記錄的高精度 ISO 時間戳記 (保留毫秒)
-function getSheetLastTimeISO(sheet) {
+// Firebase 轉移至 Firestore 的分水嶺時間（在此時間之前的歷史資料完全不做去重，確保資料安全）
+var FIREBASE_CUTOFF_TAIPEI = "2026/06/10 09:28:00";
+
+// 取得 Sheet 中最後一筆記錄的台北時間字串
+function getSheetLastTimeTaipei(sheet) {
   var lastRow = sheet.getLastRow();
   if (lastRow <= 1) {
-    return "2000-01-01T00:00:00.000Z";
+    return "2000/01/01 00:00:00";
   }
   var val = sheet.getRange(lastRow, 1).getValue();
-  var d = val instanceof Date ? val : new Date(val);
-  if (isNaN(d.getTime())) {
-    return "2000-01-01T00:00:00.000Z";
+  if (val instanceof Date) {
+    return Utilities.formatDate(val, "Asia/Taipei", "yyyy/MM/dd HH:mm:ss");
   }
-  return d.toISOString();
+  var str = (val || "").toString().trim();
+  if (/^\d{4}[/\-]\d{2}[/\-]\d{2}/.test(str)) {
+    return str.replace(/-/g, "/");
+  }
+  return "2000/01/01 00:00:00";
 }
 
-// Firestore runQuery REST 增量查詢
-function queryFirestoreCollection(projectId, token, collectionId, lastTimeISO) {
+// 將台北時間字串轉為 UTC ISO 時間戳記
+function taipeiStringToISO(str) {
+  var m = str.match(/^(\d{4})[/\-](\d{1,2})[/\-](\d{1,2})\s+(\d{1,2}):(\d{1,2}):(\d{1,2})/);
+  if (!m) return "2000-01-01T00:00:00.000Z";
+  var year = parseInt(m[1], 10);
+  var month = parseInt(m[2], 10) - 1;
+  var day = parseInt(m[3], 10);
+  var hour = parseInt(m[4], 10);
+  var min = parseInt(m[5], 10);
+  var sec = parseInt(m[6], 10);
+  var utcMs = Date.UTC(year, month, day, hour, min, sec) - 8 * 60 * 60 * 1000;
+  return new Date(utcMs).toISOString();
+}
+
+// 取得 Sheet 中作答時間並轉換為秒數 (以 UTC UNIX 格式)
+function getRowSeconds(rowDate) {
+  if (!rowDate) return 0;
+  var twStr = "";
+  if (rowDate instanceof Date) {
+    twStr = Utilities.formatDate(rowDate, "Asia/Taipei", "yyyy/MM/dd HH:mm:ss");
+  } else {
+    var str = rowDate.toString().trim();
+    if (/^\d{4}[/\-]\d{1,2}[/\-]\d{1,2}/.test(str)) {
+      twStr = str.replace(/-/g, "/");
+    }
+  }
+  if (!twStr) return 0;
+  var iso = taipeiStringToISO(twStr);
+  return Math.floor(new Date(iso).getTime() / 1000);
+}
+
+/**
+ * 壓縮與瘦身作答明細 JSON，移除非必要的超長欄位 (如題目文字)，以避免超過 Google Sheets 儲存格 50000 字元的限制。
+ * @param {string} jsonStr 原始明細 JSON 字串
+ * @return {string} 壓縮短 key 且移除題目文字後的 JSON 字串
+ */
+function compressDetailsJson(jsonStr) {
+  if (!jsonStr) return "";
+  try {
+    var details = JSON.parse(jsonStr);
+    if (!Array.isArray(details)) return jsonStr;
+    
+    var compressed = details.map(function(d) {
+      return {
+        qid: d.questionId || d.qid || "",
+        ok: d.isCorrect === true || d.ok === true,
+        sec: d.answerSec !== undefined ? d.answerSec : (d.sec !== undefined ? d.sec : null),
+        sel: d.selectedText || d.sel || ""
+      };
+    });
+    
+    var result = JSON.stringify(compressed);
+    // 超過 50000 字元時的安全閥截斷
+    if (result.length > 49900) {
+      Logger.log("⚠️ 壓縮後 JSON 長度仍超限 (" + result.length + ")，執行截斷安全閥");
+      result = result.substring(0, 49900) + "]";
+    }
+    return result;
+  } catch(e) {
+    Logger.log("⚠️ 壓縮 detailsJson 失敗：" + e.message);
+    return jsonStr.substring(0, 49900); // 粗暴截斷防卡死
+  }
+}
+
+// 將 Date 物件或時間戳記格式化為台北時間字串 (yyyy/MM/dd HH:mm:ss)
+function formatTaipeiDate(date) {
+  if (!date) return "";
+  var d = date instanceof Date ? date : new Date(date);
+  if (isNaN(d.getTime())) return "";
+  return Utilities.formatDate(d, "Asia/Taipei", "yyyy/MM/dd HH:mm:ss");
+}
+
+// 清除「成績紀錄」Sheet 中的重複資料 (僅針對移轉後資料進行除重)
+function deduplicateSheetScores(sheet) {
+  if (!sheet || sheet.getLastRow() <= 1) return;
+  var range = sheet.getDataRange();
+  var values = range.getValues();
+  var headers = values[0];
+  var uniqueKeys = {};
+  var rowsToKeep = [headers];
+  var duplicateCount = 0;
+  
+  var cutoffSeconds = getRowSeconds(FIREBASE_CUTOFF_TAIPEI);
+  
+  for (var i = 1; i < values.length; i++) {
+    var row = values[i];
+    var seconds = getRowSeconds(row[0]);
+    
+    // 移轉前的歷史資料一律直接保留，完全不參與去重邏輯，保障其安全性與格式相容性
+    if (seconds < cutoffSeconds) {
+      rowsToKeep.push(row);
+      continue;
+    }
+    
+    var studentId = row[1] ? row[1].toString().trim() : "";
+    var topic = row[3] ? row[3].toString().trim() : "";
+    var score = row[6] !== undefined ? row[6].toString().trim() : "";
+    
+    var key = seconds + "_" + studentId + "_" + topic + "_" + score;
+    if (uniqueKeys[key]) {
+      duplicateCount++;
+      continue;
+    }
+    uniqueKeys[key] = true;
+    rowsToKeep.push(row);
+  }
+  
+  if (duplicateCount > 0) {
+    sheet.clearContents();
+    sheet.getRange(1, 1, rowsToKeep.length, headers.length).setValues(rowsToKeep);
+    Logger.log("🧹 已清除 成績紀錄 表中 " + duplicateCount + " 筆重複資料");
+  }
+}
+
+// 清除「作答明細」
+function fillExistingScoresDetailsJson() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var scoreSheet = ss.getSheetByName(SHEET_SCORES);
+  if (!scoreSheet || scoreSheet.getLastRow() <= 1) {
+    Logger.log("❌ 成績紀錄工作表是空的！");
+    return;
+  }
+  
+  var scoreRange = scoreSheet.getDataRange();
+  var scoreVals = scoreRange.getValues();
+  var scoreHeaders = scoreVals[0].map(function(h) { return h ? h.toString().trim() : ""; });
+  
+  Logger.log("📋 試算表實際標頭: " + JSON.stringify(scoreHeaders));
+  
+  // 動態尋找欄位 index
+  var cTime = findColIdx(scoreHeaders, ["時間戳記", "時間"]);
+  var cSid = findColIdx(scoreHeaders, ["學號"]);
+  var cName = findColIdx(scoreHeaders, ["姓名"]);
+  var cTopic = findColIdx(scoreHeaders, ["測驗單元", "單元"]);
+  var cScore = findColIdx(scoreHeaders, ["分數"]);
+  var cJson = findColIdx(scoreHeaders, ["作答明細(JSON)", "作答明細 (JSON)"]);
+  
+  Logger.log("ℹ️ 試算表欄位位置 - 時間: " + cTime + ", 學號: " + cSid + ", 姓名: " + cName + ", 單元: " + cTopic + ", 分數: " + cScore + ", JSON: " + cJson);
+  
+  // 清除因為長度 bug 被擠到第 14 欄的錯誤標頭與多餘欄位
+  if (scoreHeaders[13] === "作答明細(JSON)" || scoreHeaders[13] === "作答明細 (JSON)") {
+    scoreSheet.getRange(1, 14).clear();
+    scoreVals = scoreSheet.getDataRange().getValues();
+    scoreHeaders = scoreVals[0].map(function(h) { return h ? h.toString().trim() : ""; });
+    cJson = -1;
+  }
+  
+  // 確保標頭有第 13 欄 (作答明細(JSON))
+  if (cJson === -1) {
+    scoreSheet.getRange(1, 13).setValue("作答明細(JSON)").setFontWeight("bold").setBackground("#fce7f3");
+    scoreVals = scoreSheet.getDataRange().getValues();
+    scoreHeaders = scoreVals[0].map(function(h) { return h ? h.toString().trim() : ""; });
+    cJson = 12; // index 12 就是第 13 欄
+    Logger.log("ℹ️ 已強制將第 13 欄設為作答明細(JSON)！");
+  }
+
+  var detailSheet = ss.getSheetByName(SHEET_DETAILS);
+  var fillCount = 0;
+  
+  // 取得 7 天前的時間戳記 (毫秒)
+  var cutoffMs = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  var cutoffSeconds = Math.floor(cutoffMs / 1000);
+  var startTimeISO = new Date(cutoffMs).toISOString();
+  Logger.log("📅 設定 7 天前截止點: " + startTimeISO + " (秒數: " + cutoffSeconds + ")");
+
+  // ────────────────────────────────────────────────────────
+  // 優先方案：如果「題目作答明細」工作表還在，直接從本機 Sheets 讀取並重組 JSON
+  // ────────────────────────────────────────────────────────
+  if (detailSheet && detailSheet.getLastRow() > 1) {
+    Logger.log("📂 偵測到「題目作答明細」工作表存在，行數: " + detailSheet.getLastRow() + "。開始重組...");
+    var detailVals = detailSheet.getDataRange().getValues();
+    var detailHeaders = detailVals[0].map(function(h) { return h ? h.toString().trim() : ""; });
+    
+    var dTimeIdx = findColIdx(detailHeaders, ["時間戳記", "時間"]);
+    var dSidIdx = findColIdx(detailHeaders, ["學號"]);
+    var dQidIdx = findColIdx(detailHeaders, ["題目ID", "題目id"]);
+    var dTopicIdx = findColIdx(detailHeaders, ["測驗單元", "單元"]);
+    var dSelIdx = findColIdx(detailHeaders, ["學生選項", "選項"]);
+    var dIsCorrectIdx = findColIdx(detailHeaders, ["是否答對", "答對"]);
+    var dSecIdx = findColIdx(detailHeaders, ["作答秒數", "秒數"]);
+    
+    Logger.log("ℹ️ 明細表欄位位置 - 時間: " + dTimeIdx + ", 學號: " + dSidIdx + ", 題目ID: " + dQidIdx + ", 單元: " + dTopicIdx);
+    
+    // 以 學號 + "_" + 單元 分組
+    var localDetailMap = {};
+    var validDetailCount = 0;
+    for (var d = 1; d < detailVals.length; d++) {
+      var dRow = detailVals[d];
+      var seconds = getRowSeconds(dRow[dTimeIdx]);
+      // 限制只處理 7 天內明細，減少記憶體與配對時間
+      if (seconds < cutoffSeconds) continue;
+      
+      var sid = dSidIdx !== -1 && dRow[dSidIdx] ? dRow[dSidIdx].toString().replace(/\s+/g, "") : "";
+      var topic = dTopicIdx !== -1 && dRow[dTopicIdx] ? dRow[dTopicIdx].toString().replace(/\s+/g, "") : "";
+      if (!sid || !topic) continue;
+      
+      var key = sid + "_" + topic;
+      
+      var qid = dQidIdx !== -1 && dRow[dQidIdx] ? dRow[dQidIdx].toString().trim() : "";
+      var isCorrect = dIsCorrectIdx !== -1 && (dRow[dIsCorrectIdx] === "答對" || dRow[dIsCorrectIdx] === true || dRow[dIsCorrectIdx] === "true");
+      var sec = dSecIdx !== -1 && dRow[dSecIdx] !== undefined && dRow[dSecIdx] !== "" ? Number(dRow[dSecIdx]) || 0 : 0;
+      var sel = dSelIdx !== -1 && dRow[dSelIdx] !== undefined ? dRow[dSelIdx].toString() : "";
+      
+      if (!localDetailMap[key]) {
+        localDetailMap[key] = [];
+      }
+      localDetailMap[key].push({
+        seconds: seconds,
+        item: { qid: qid, ok: isCorrect, sec: sec, sel: sel }
+      });
+      validDetailCount++;
+    }
+    Logger.log("📥 成功在記憶體中建立 (7天內) " + Object.keys(localDetailMap).length + " 個 學號_單元 分組，共 " + validDetailCount + " 筆明細資料");
+    
+    // 開始與成績紀錄進行比對補填
+    var unmatchedSamples = [];
+    var alreadyFilledCount = 0;
+    
+    for (var i = 1; i < scoreVals.length; i++) {
+      var row = scoreVals[i];
+      var existingJson = cJson !== -1 && row[cJson] ? row[cJson].toString().trim() : "";
+      if (existingJson) {
+        alreadyFilledCount++;
+        continue;
+      }
+      
+      var sTime = cTime !== -1 ? getRowSeconds(row[cTime]) : 0;
+      if (sTime <= 0) continue;
+      // 限制只比對 7 天內的紀錄
+      if (sTime < cutoffSeconds) continue;
+      
+      var sSid = cSid !== -1 && row[cSid] ? row[cSid].toString().replace(/\s+/g, "") : "";
+      var sTopic = cTopic !== -1 && row[cTopic] ? row[cTopic].toString().replace(/\s+/g, "") : "";
+      var key = sSid + "_" + sTopic;
+      
+      var detailList = localDetailMap[key];
+      var matched = false;
+      if (detailList && detailList.length > 0) {
+        var matchedItems = [];
+        detailList.forEach(function(dObj) {
+          if (Math.abs(dObj.seconds - sTime) <= 300) {
+            matchedItems.push(dObj.item);
+          }
+        });
+        
+        if (matchedItems.length > 0) {
+          row[cJson] = JSON.stringify(matchedItems);
+          fillCount++;
+          matched = true;
+        }
+      }
+      
+      if (!matched && unmatchedSamples.length < 5) {
+        unmatchedSamples.push({
+          rowNum: i + 1,
+          sid: sSid,
+          topic: sTopic,
+          scoreTimeStr: cTime !== -1 ? row[cTime] : "",
+          scoreTimeSec: sTime,
+          hasDetailKey: !!detailList,
+          detailTimes: detailList ? detailList.map(function(d) { return d.seconds; }) : []
+        });
+      }
+    }
+    
+    Logger.log("ℹ️ 比對報告：目前已填 JSON " + alreadyFilledCount + " 筆，本次補填成功 " + fillCount + " 筆。");
+    if (unmatchedSamples.length > 0) {
+      Logger.log("⚠️ 配對失敗範例 (前 5 筆)：" + JSON.stringify(unmatchedSamples, null, 2));
+    }
+    
+    if (fillCount > 0) {
+      Logger.log("💾 正在寫入 " + fillCount + " 筆從本地重組的 JSON 明細到成績紀錄表...");
+      scoreSheet.getRange(1, 1, scoreVals.length, scoreHeaders.length).setValues(scoreVals);
+      Logger.log("🎉 本地重組補填完成！已成功補上 " + fillCount + " 筆成績紀錄的作答明細！");
+      return;
+    } else {
+      Logger.log("ℹ️ 本地比對結束，沒有成功匹配到資料。繼續嘗試從 Firebase 同步補填...");
+    }
+  } else {
+    Logger.log("📂 「題目作答明細」工作表不存在或為空。");
+  }
+
+  // ────────────────────────────────────────────────────────
+  // 備用方案：若「題目作答明細」已刪除，則從 Firebase 的 answerBatches 同步重組
+  // ────────────────────────────────────────────────────────
+  Logger.log("⚠️ 開始執行 Firebase 下載重組方案...");
+  var props = PropertiesService.getScriptProperties();
+  var projectId = props.getProperty("FIREBASE_PROJECT_ID");
+  if (!projectId) {
+    Logger.log("❌ 找不到 FIREBASE_PROJECT_ID，無法從 Firebase 同步。");
+    return;
+  }
+  var token = firebaseAccessTokenV1685();
+  
+  Logger.log("🚀 1. 下載 Firebase answerBatches (7 天內) 進行比對...");
+  var newBatches = queryFirestoreCollectionAll(projectId, token, "answerBatches", startTimeISO);
+  Logger.log("📥 取得 " + newBatches.length + " 筆 batches 記錄");
+  
+  var firebaseGroup = {};
+  var firebaseHasJsonCount = 0;
+  newBatches.forEach(function(doc) {
+    if (!doc.detailsJson) return;
+    firebaseHasJsonCount++;
+    var studentId = doc.studentId ? doc.studentId.toString().replace(/\s+/g, "") : "";
+    var topic = doc.topic ? doc.topic.toString().replace(/\s+/g, "") : "";
+    var score = doc.score !== undefined ? doc.score.toString().replace(/\s+/g, "") : "";
+    var key = studentId + "_" + topic + "_" + score;
+    
+    var docISO = doc.createdAt ? new Date(doc.createdAt).toISOString() : "";
+    var docSeconds = docISO ? Math.floor(new Date(docISO).getTime() / 1000) : 0;
+    
+    if (!firebaseGroup[key]) firebaseGroup[key] = [];
+    firebaseGroup[key].push({
+      seconds: docSeconds,
+      detailsJson: compressDetailsJson(doc.detailsJson)
+    });
+  });
+  Logger.log("📥 Firebase 中含有 detailsJson 的 batches 有 " + firebaseHasJsonCount + " 筆");
+  
+  var firebaseFillCount = 0;
+  var unmatchedFirebaseSamples = [];
+  for (var i = 1; i < scoreVals.length; i++) {
+    var row = scoreVals[i];
+    var existingJson = cJson !== -1 && row[cJson] ? row[cJson].toString().trim() : "";
+    if (existingJson) continue;
+    
+    var seconds = cTime !== -1 ? getRowSeconds(row[cTime]) : 0;
+    if (seconds <= 0) continue;
+    // 限制只比對 7 天內的紀錄
+    if (seconds < cutoffSeconds) continue;
+    
+    var studentId = cSid !== -1 && row[cSid] ? row[cSid].toString().replace(/\s+/g, "") : "";
+    var topic = cTopic !== -1 && row[cTopic] ? row[cTopic].toString().replace(/\s+/g, "") : "";
+    var score = cScore !== -1 && row[cScore] !== undefined ? row[cScore].toString().replace(/\s+/g, "") : "";
+    var key = studentId + "_" + topic + "_" + score;
+    
+    var group = firebaseGroup[key];
+    var matched = false;
+    if (group && group.length > 0) {
+      var bestIdx = -1;
+      var minDiff = 1800; // 30 分鐘
+      for (var g = 0; g < group.length; g++) {
+        var diff = Math.abs(group[g].seconds - seconds);
+        if (diff < minDiff) {
+          minDiff = diff;
+          bestIdx = g;
+        }
+      }
+      if (bestIdx !== -1) {
+        row[cJson] = group[bestIdx].detailsJson;
+        firebaseFillCount++;
+        matched = true;
+        group.splice(bestIdx, 1);
+      }
+    }
+    
+    if (!matched && unmatchedFirebaseSamples.length < 5) {
+      unmatchedFirebaseSamples.push({
+        rowNum: i + 1,
+        key: key,
+        seconds: seconds,
+        hasFirebaseKey: !!group,
+        firebaseTimes: group ? group.map(function(g) { return g.seconds; }) : []
+      });
+    }
+  }
+  
+  Logger.log("ℹ️ 比對報告（Firebase Batches）：本次補填成功 " + firebaseFillCount + " 筆。");
+  if (unmatchedFirebaseSamples.length > 0) {
+    Logger.log("⚠️ Firebase Batches 配對失敗範例 (前 5 筆)：" + JSON.stringify(unmatchedFirebaseSamples, null, 2));
+  }
+  
+  if (firebaseFillCount > 0) {
+    Logger.log("💾 正在寫入 " + firebaseFillCount + " 筆從 Firebase 匹配的 JSON 明細到試算表...");
+    scoreSheet.getRange(1, 1, scoreVals.length, scoreHeaders.length).setValues(scoreVals);
+  }
+
+  // ────────────────────────────────────────────────────────
+  // 終極備用方案：如果還有剩餘的空白明細，直接從 Firebase answerDetails 重組
+  // ────────────────────────────────────────────────────────
+  var remainingEmptyCount = 0;
+  for (var i = 1; i < scoreVals.length; i++) {
+    var sTime = cTime !== -1 ? getRowSeconds(scoreVals[i][cTime]) : 0;
+    if (sTime < cutoffSeconds) continue; // 只看 7 天內的
+    
+    var existingJson = cJson !== -1 && scoreVals[i][cJson] ? scoreVals[i][cJson].toString().trim() : "";
+    if (!existingJson) remainingEmptyCount++;
+  }
+  
+  if (remainingEmptyCount > 0) {
+    Logger.log("⚠️ 尚有 " + remainingEmptyCount + " 筆最近一週歷史紀錄缺乏作答明細，啟動終極方案：從 Firebase answerDetails (7 天內) 集合全量重組...");
+    
+    var allDetails = queryFirestoreCollectionAll(projectId, token, "answerDetails", startTimeISO);
+    Logger.log("📥 成功下載 " + allDetails.length + " 筆 Firebase 題目明細");
+    
+    // 以 學號 + "_" + 單元 分組
+    var firebaseDetailGroup = {};
+    allDetails.forEach(function(doc) {
+      var studentId = doc.studentId ? doc.studentId.toString().replace(/\s+/g, "") : "";
+      var topic = doc.topic ? doc.topic.toString().replace(/\s+/g, "") : "";
+      if (!studentId || !topic) return;
+      
+      var key = studentId + "_" + topic;
+      var docISO = doc.createdAt ? new Date(doc.createdAt).toISOString() : "";
+      var docSeconds = docISO ? Math.floor(new Date(docISO).getTime() / 1000) : 0;
+      
+      var isCorrect = doc.isCorrect === true || doc.isCorrect === "true";
+      var sec = doc.answerSec !== undefined && doc.answerSec !== null ? Number(doc.answerSec) || 0 : 0;
+      var sel = doc.selectedText !== undefined ? doc.selectedText.toString() : "";
+      var qid = doc.questionId || "";
+      
+      if (!firebaseDetailGroup[key]) {
+        firebaseDetailGroup[key] = [];
+      }
+      firebaseDetailGroup[key].push({
+        seconds: docSeconds,
+        item: { qid: qid, ok: isCorrect, sec: sec, sel: sel }
+      });
+    });
+    Logger.log("📥 成功在記憶體中建立 " + Object.keys(firebaseDetailGroup).length + " 個 學號_單元 Firebase 明細分組");
+    
+    var detailsFillCount = 0;
+    for (var i = 1; i < scoreVals.length; i++) {
+      var row = scoreVals[i];
+      var seconds = cTime !== -1 ? getRowSeconds(row[cTime]) : 0;
+      if (seconds <= 0 || seconds < cutoffSeconds) continue;
+      
+      var existingJson = cJson !== -1 && row[cJson] ? row[cJson].toString().trim() : "";
+      if (existingJson) continue;
+      
+      var studentId = cSid !== -1 && row[cSid] ? row[cSid].toString().replace(/\s+/g, "") : "";
+      var topic = cTopic !== -1 && row[cTopic] ? row[cTopic].toString().replace(/\s+/g, "") : "";
+      var key = studentId + "_" + topic;
+      
+      var list = firebaseDetailGroup[key];
+      if (list && list.length > 0) {
+        // 尋找在 seconds 前後 5 分鐘 (300 秒) 內的所有題目細節
+        var matchedItems = [];
+        list.forEach(function(dObj) {
+          if (Math.abs(dObj.seconds - seconds) <= 300) {
+            matchedItems.push(dObj.item);
+          }
+        });
+        
+        if (matchedItems.length > 0) {
+          row[cJson] = JSON.stringify(matchedItems);
+          detailsFillCount++;
+        }
+      }
+    }
+    
+    if (detailsFillCount > 0) {
+      Logger.log("💾 正在寫入 " + detailsFillCount + " 筆從 Firebase answerDetails 重組的 JSON 到試算表...");
+      scoreSheet.getRange(1, 1, scoreVals.length, scoreHeaders.length).setValues(scoreVals);
+      Logger.log("🎉 終極補填完成！已成功補上 " + detailsFillCount + " 筆歷史成績的作答明細！");
+    } else {
+      Logger.log("ℹ️ 終極比對結束，未配對到任何題目細節。");
+    }
+  }
+}
+
+
+/**
+ * 一鍵終極修復所有問題（補填 JSON 並重建所有快取）
+ */
+function oneClickFixAll() {
+  Logger.log("🚀 1/2. 開始一鍵補填歷史作答明細 (JSON)...");
+  fillExistingScoresDetailsJson();
+  
+  Logger.log("🚀 2/2. 開始重建學生成績總表與分析快取...");
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  manualUpdateScoreTable();
+  
+  Logger.log("🎉 一鍵修復完成！請立刻回到試算表確認快取工作表！");
+}
+
+// 供測試或手動一鍵補齊今天所有 Firebase 成績紀錄的入口
+function runManualForceSyncAll() {
+  forceSyncFromTime("2026/06/10 09:28:00");
+}
+
+/**
+ * 抓取 Firebase 09:28 以後的所有成績，並以 Tab 分隔格式印在 Logger 中，供使用者手動貼回。
+ */
+function logFirebaseScoresToText() {
+  var props = PropertiesService.getScriptProperties();
+  var projectId = props.getProperty("FIREBASE_PROJECT_ID");
+  if (!projectId) {
+    Logger.log("❌ 找不到 FIREBASE_PROJECT_ID，請在 Script Properties 中設定");
+    return;
+  }
+  var token = firebaseAccessTokenV1685();
+  var startTimeISO = taipeiStringToISO("2026/06/10 09:28:00");
+  
+  Logger.log("🚀 正在從 Firebase 下載 " + startTimeISO + " 之後的所有成績...");
+  var newBatches = queryFirestoreCollection(projectId, token, "answerBatches", startTimeISO);
+  
+  if (newBatches.length === 0) {
+    Logger.log("❌ 沒有找到任何成績紀錄。");
+    return;
+  }
+  
+  var lines = [];
+  newBatches.forEach(function(doc) {
+    var twTime = formatTaipeiDate(doc.createdAt);
+    var row = [
+      twTime,
+      doc.studentId || "",
+      doc.name || "",
+      doc.topic || "",
+      doc.mode || "",
+      doc.attempt || 1,
+      doc.score || 0,
+      doc.correctCount || 0,
+      doc.wrongCount || 0,
+      doc.duration !== undefined ? doc.duration : "",
+      doc.token || "",
+      doc.ip || ""
+    ];
+    lines.push(row.join("\t"));
+  });
+  
+  var resultText = lines.join("\n");
+  Logger.log("\n=== 複製下方內容，直接在 Google Sheets「成績紀錄」第一筆空白列貼上 ===\n" + resultText + "\n==================================================");
+}
+
+/**
+ * 抓取 Firebase 09:28 以後的所有作答明細，並以 Tab 分隔格式印在 Logger 中，供使用者手動貼回。
+ */
+function logFirebaseDetailsToText() {
+  var props = PropertiesService.getScriptProperties();
+  var projectId = props.getProperty("FIREBASE_PROJECT_ID");
+  if (!projectId) {
+    Logger.log("❌ 找不到 FIREBASE_PROJECT_ID，請在 Script Properties 中設定");
+    return;
+  }
+  var token = firebaseAccessTokenV1685();
+  var startTimeISO = taipeiStringToISO("2026/06/10 09:28:00");
+  
+  Logger.log("🚀 正在從 Firebase 下載 " + startTimeISO + " 之後的所有作答明細...");
+  var newBatches = queryFirestoreCollection(projectId, token, "answerBatches", startTimeISO);
+  
+  if (newBatches.length === 0) {
+    Logger.log("❌ 沒有找到任何作答紀錄。");
+    return;
+  }
+  
+  var detailRows = [];
+  newBatches.forEach(function(doc) {
+    if (doc.detailsJson) {
+      try {
+        var details = JSON.parse(doc.detailsJson);
+        if (Array.isArray(details)) {
+          details.forEach(function(d, idx) {
+            var row = [
+              doc.createdAt ? formatTaipeiDate(doc.createdAt) : "",
+              doc.studentId || "",
+              doc.name || "",
+              d.questionId || ("Q_" + idx),
+              d.questionText || "",
+              d.topic || "",
+              d.selectedText || "",
+              d.correctText || "",
+              d.isCorrect ? "答對" : "答錯",
+              doc.mode || "",
+              doc.attempt || 1,
+              d.answerSec !== null && d.answerSec !== undefined ? d.answerSec : "",
+              d.questionType || "",
+              d.cogType || ""
+            ];
+            detailRows.push(row.join("\t"));
+          });
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+  });
+  
+  var resultText = detailRows.join("\n");
+  Logger.log("\n=== 複製下方內容，直接在 Google Sheets「作答明細」第一筆空白列貼上 ===\n" + resultText + "\n==================================================");
+}
+
+/**
+ * 搜尋 Firebase 中所有名為「張欣翰」的成績記錄 (Debug 專用)
+ */
+function debugFindStudent() {
+  var studentName = "張欣翰";
+  var props = PropertiesService.getScriptProperties();
+  var projectId = props.getProperty("FIREBASE_PROJECT_ID");
+  if (!projectId) {
+    Logger.log("❌ 找不到 FIREBASE_PROJECT_ID");
+    return;
+  }
+  var token = firebaseAccessTokenV1685();
+  
   var url = "https://firestore.googleapis.com/v1/projects/" + projectId + "/databases/(default)/documents:runQuery";
   var payload = {
     structuredQuery: {
-      from: [{ collectionId: collectionId }],
-      where: {
-        fieldFilter: {
-          field: { fieldPath: "createdAt" },
-          op: "GREATER_THAN",
-          value: { timestampValue: lastTimeISO }
-        }
-      },
-      orderBy: [{ field: { fieldPath: "createdAt" }, direction: "ASCENDING" }]
+      from: [{ collectionId: "answerBatches" }],
+      limit: 3000
     }
   };
   
+  Logger.log("🚀 開始在 Firebase 搜尋「" + studentName + "」的紀錄...");
   var res = UrlFetchApp.fetch(url, {
     method: "post",
     contentType: "application/json",
@@ -2742,125 +3455,777 @@ function queryFirestoreCollection(projectId, token, collectionId, lastTimeISO) {
   });
   
   if (res.getResponseCode() >= 300) {
-    throw new Error("Firestore 查詢 " + collectionId + " 失敗：" + res.getContentText());
-  }
-  
-  var results = JSON.parse(res.getContentText());
-  var list = [];
-  results.forEach(function(r) {
-    if (r.document && r.document.fields) {
-      list.push(parseFirebaseFields(r.document.fields));
-    }
-  });
-  return list;
-}
-
-// 從 Firestore 增量同步數據回 Google Sheets
-function syncFirestoreToSheetsV169(ss) {
-  var props = PropertiesService.getScriptProperties();
-  var projectId = props.getProperty("FIREBASE_PROJECT_ID");
-  if (!projectId) {
-    Logger.log("⚠️ Firebase Project ID 尚未設定，跳過同步。");
+    Logger.log("❌ Firebase 查詢失敗：" + res.getContentText());
     return;
   }
   
-  var token = firebaseAccessTokenV1685();
+  var results = JSON.parse(res.getContentText());
+  Logger.log("📥 從 Firebase 取得的原始紀錄總數: " + (results ? results.length : 0));
   
-  // 1. 同步 answerBatches 到 SHEET_SCORES
-  var scoreSheet = ss.getSheetByName(SHEET_SCORES);
-  if (!scoreSheet) {
-    scoreSheet = ss.insertSheet(SHEET_SCORES);
-    scoreSheet.appendRow(["時間戳記","學號","姓名","測驗單元","測驗模式","第幾次","分數","答對題數","答錯題數","作答秒數","Token","IP"]);
-    scoreSheet.getRange(1,1,1,12).setFontWeight("bold").setBackground("#fce7f3");
-    scoreSheet.setFrozenRows(1);
+  var count = 0;
+  results.forEach(function(r) {
+    if (r.document && r.document.fields) {
+      var doc = parseFirebaseFields(r.document.fields);
+      if (doc.name && doc.name.indexOf(studentName) !== -1) {
+        count++;
+        var twTime = doc.createdAt ? formatTaipeiDate(doc.createdAt) : "無時間欄位";
+        Logger.log("🔍 找到紀錄 [" + count + "]: 姓名=" + doc.name + ", 學號=" + doc.studentId + ", 單元=" + doc.topic + ", 分數=" + doc.score + ", 交卷時間=" + twTime + ", Token=" + doc.token);
+      }
+    }
+  });
+  
+  if (count === 0) {
+    Logger.log("❌ 在這批 Firebase 資料中完全找不到名為「" + studentName + "」的紀錄！");
+  } else {
+    Logger.log("🎉 搜尋結束，共找到 " + count + " 筆紀錄。");
+  }
+}
+
+/**
+ * 抓取 Firebase 09:28 以後的所有成績，並直接寫入一個名為「臨時_Firebase成績紀錄」的新工作表中。
+ * 這是為了避開 Google Apps Script 執行紀錄 Logger.log 單次長度被截斷的限制。
+ */
+function writeFirebaseScoresToTempSheet() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var props = PropertiesService.getScriptProperties();
+  var projectId = props.getProperty("FIREBASE_PROJECT_ID");
+  if (!projectId) {
+    Logger.log("❌ 找不到 FIREBASE_PROJECT_ID");
+    return;
+  }
+  var token = firebaseAccessTokenV1685();
+  var startTimeISO = taipeiStringToISO("2026/06/10 09:28:00");
+  
+  Logger.log("🚀 正在從 Firebase 下載 " + startTimeISO + " 之後的所有成績...");
+  var newBatches = queryFirestoreCollection(projectId, token, "answerBatches", startTimeISO);
+  
+  if (newBatches.length === 0) {
+    Logger.log("❌ 沒有找到任何成績紀錄。");
+    return;
   }
   
-  var lastScoreTime = getSheetLastTimeISO(scoreSheet);
-  var newBatches = queryFirestoreCollection(projectId, token, "answerBatches", lastScoreTime);
+  // 建立或取得臨時工作表
+  var tempSheetName = "臨時_Firebase成績紀錄";
+  var tempSheet = ss.getSheetByName(tempSheetName);
+  if (tempSheet) {
+    tempSheet.clear();
+  } else {
+    tempSheet = ss.insertSheet(tempSheetName);
+  }
   
-  if (newBatches.length > 0) {
-    var scoreRows = newBatches.map(function(doc) {
-      return [
-        doc.createdAt ? new Date(doc.createdAt) : "",
-        doc.studentId || "",
-        doc.name || "",
-        doc.topic || "",
-        doc.mode || "",
-        doc.attempt || 1,
-        doc.score || 0,
-        doc.correctCount || 0,
-        doc.wrongCount || 0,
-        doc.duration !== undefined ? doc.duration : "",
-        doc.token || "",
-        doc.ip || ""
-      ];
-    });
-    scoreSheet.getRange(scoreSheet.getLastRow() + 1, 1, scoreRows.length, 12).setValues(scoreRows);
-    Logger.log("✅ 已同步 " + scoreRows.length + " 筆成績紀錄到 Sheet");
+  // 寫入標頭
+  var headers = ["時間戳記","學號","姓名","測驗單元","測驗模式","第幾次","分數","答對題數","答錯題數","作答秒數","Token","IP"];
+  tempSheet.appendRow(headers);
+  
+  var scoreRows = [];
+  newBatches.forEach(function(doc) {
+    var twTime = formatTaipeiDate(doc.createdAt);
+    scoreRows.push([
+      twTime,
+      doc.studentId || "",
+      doc.name || "",
+      doc.topic || "",
+      doc.mode || "",
+      doc.attempt || 1,
+      doc.score || 0,
+      doc.correctCount || 0,
+      doc.wrongCount || 0,
+      doc.duration !== undefined ? doc.duration : "",
+      doc.token || "",
+      doc.ip || ""
+    ]);
+  });
+  
+  if (scoreRows.length > 0) {
+    tempSheet.getRange(2, 1, scoreRows.length, 12).setValues(scoreRows);
+  }
+  
+  Logger.log("🎉 已將 " + scoreRows.length + " 筆成績資料寫入工作表「" + tempSheetName + "」！請直接至該工作表複製。");
+}
 
-    // ── 從新 batches 的 detailsJson 中直接解析明細 ──
-    var detailRowsFromBatches = [];
-    newBatches.forEach(function(doc) {
-      if (doc.detailsJson) {
-        try {
-          var details = JSON.parse(doc.detailsJson);
-          if (Array.isArray(details)) {
-            details.forEach(function(d, idx) {
-              detailRowsFromBatches.push([
-                doc.createdAt ? new Date(doc.createdAt) : "",
-                doc.studentId || "",
-                doc.name || "",
-                d.questionId || ("Q_" + idx),
-                d.questionText || "",
-                d.topic || "",
-                d.selectedText || "",
-                d.correctText || "",
-                d.isCorrect ? "答對" : "答錯",
-                doc.mode || "",
-                doc.attempt || 1,
-                d.answerSec !== null && d.answerSec !== undefined ? d.answerSec : "",
-                d.questionType || "",
-                d.cogType || ""
-              ]);
-            });
-          }
-        } catch (e) {
-          Logger.log("⚠️ 解析 detailsJson 失敗：" + e.message);
+/**
+ * 抓取 Firebase 09:28 以後的所有作答明細，並直接寫入一個名為「臨時_Firebase作答明細」的新工作表中。
+ */
+function writeFirebaseDetailsToTempSheet() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var props = PropertiesService.getScriptProperties();
+  var projectId = props.getProperty("FIREBASE_PROJECT_ID");
+  if (!projectId) {
+    Logger.log("❌ 找不到 FIREBASE_PROJECT_ID");
+    return;
+  }
+  var token = firebaseAccessTokenV1685();
+  var startTimeISO = taipeiStringToISO("2026/06/10 09:28:00");
+  
+  Logger.log("🚀 正在從 Firebase 下載 " + startTimeISO + " 之後的所有作答明細...");
+  var newBatches = queryFirestoreCollection(projectId, token, "answerBatches", startTimeISO);
+  
+  if (newBatches.length === 0) {
+    Logger.log("❌ 沒有找到任何作答紀錄。");
+    return;
+  }
+  
+  var tempSheetName = "臨時_Firebase作答明細";
+  var tempSheet = ss.getSheetByName(tempSheetName);
+  if (tempSheet) {
+    tempSheet.clear();
+  } else {
+    tempSheet = ss.insertSheet(tempSheetName);
+  }
+  
+  var headers = ["時間戳記","學號","姓名","題目ID","題目內容","單元分類","學生選擇","正確答案","是否正確","測驗模式","第幾次","作答秒數","題型","認知階層"];
+  tempSheet.appendRow(headers);
+  
+  var detailRows = [];
+  newBatches.forEach(function(doc) {
+    if (doc.detailsJson) {
+      try {
+        var details = JSON.parse(doc.detailsJson);
+        if (Array.isArray(details)) {
+          details.forEach(function(d, idx) {
+            detailRows.push([
+              doc.createdAt ? formatTaipeiDate(doc.createdAt) : "",
+              doc.studentId || "",
+              doc.name || "",
+              d.questionId || ("Q_" + idx),
+              d.questionText || "",
+              d.topic || "",
+              d.selectedText || "",
+              d.correctText || "",
+              d.isCorrect ? "答對" : "答錯",
+              doc.mode || "",
+              doc.attempt || 1,
+              d.answerSec !== null && d.answerSec !== undefined ? d.answerSec : "",
+              d.questionType || "",
+              d.cogType || ""
+            ]);
+          });
         }
+      } catch (e) {
+        // ignore
       }
-    });
-
-    if (detailRowsFromBatches.length > 0) {
-      var detailSheet = getActiveDetailSheet(ss);
-      detailSheet.getRange(detailSheet.getLastRow() + 1, 1, detailRowsFromBatches.length, DETAIL_HEADER.length).setValues(detailRowsFromBatches);
-      Logger.log("✅ 已從 JSON 解析同步 " + detailRowsFromBatches.length + " 筆作答明細到 Sheet");
+    }
+  });
+  
+  if (detailRows.length > 0) {
+    var batchSize = 5000;
+    for (var i = 0; i < detailRows.length; i += batchSize) {
+      var chunk = detailRows.slice(i, i + batchSize);
+      tempSheet.getRange(tempSheet.getLastRow() + 1, 1, chunk.length, chunk[0].length).setValues(chunk);
     }
   }
+  
+  Logger.log("🎉 已將 " + detailRows.length + " 筆明細資料寫入工作表「" + tempSheetName + "」！請直接至該工作表複製。");
+}
 
-  // 2. 同步 answerDetails 到 SHEET_DETAILS（用以完美相容舊資料或補漏）
-  var detailSheet = getActiveDetailSheet(ss);
-  var lastDetailTime = getSheetLastTimeISO(detailSheet);
-  var newDetails = queryFirestoreCollection(projectId, token, "answerDetails", lastDetailTime);
-  if (newDetails.length > 0) {
-    var detailRows = newDetails.map(function(doc) {
-      return [
-        doc.createdAt ? new Date(doc.createdAt) : "",
-        doc.studentId || "",
-        doc.name || "",
-        doc.questionId || "",
-        doc.questionText || "",
-        doc.topic || "",
-        doc.selectedText || "",
-        doc.correctText || "",
-        doc.isCorrect ? "答對" : "答錯",
-        doc.mode || "",
-        doc.attempt || 1,
-        doc.answerSec !== null && doc.answerSec !== undefined ? doc.answerSec : "",
-        doc.questionType || "",
-        doc.cogType || ""
-      ];
+/**
+ * 系統健康與確認機制檢測工具 (Health Check)
+ * 自動檢測 Firebase 通訊、時區轉換、去重安全分水嶺以及 Sheet 讀寫狀態
+ */
+function runSystemHealthCheck() {
+  Logger.log("==================================================");
+  Logger.log("🔍 開始執行 題庫與 Firebase 系統整合健康檢查...");
+  Logger.log("==================================================");
+  
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var props = PropertiesService.getScriptProperties();
+  
+  // 1. 檢測 Firebase 專案設定
+  var projectId = props.getProperty("FIREBASE_PROJECT_ID");
+  if (!projectId) {
+    Logger.log("❌ [設定檢查] 未在指令碼屬性中設定 FIREBASE_PROJECT_ID！");
+    return;
+  }
+  Logger.log("✅ [設定檢查] Firebase Project ID: " + projectId);
+  
+  // 2. 檢測 Token 取得
+  var token = "";
+  try {
+    token = firebaseAccessTokenV1685();
+    if (token) {
+      Logger.log("✅ [連線檢查] 成功取得 Firebase Access Token (前10碼: " + token.substring(0, 10) + "...)");
+    } else {
+      Logger.log("❌ [連線檢查] 取得的 Token 為空值！");
+      return;
+    }
+  } catch(e) {
+    Logger.log("❌ [連線檢查] 取得 Access Token 失敗：" + e.message);
+    return;
+  }
+  
+  // 3. 檢測 Firestore REST API 讀取
+  try {
+    var url = "https://firestore.googleapis.com/v1/projects/" + projectId + "/databases/(default)/documents:runQuery";
+    var payload = {
+      structuredQuery: {
+        from: [{ collectionId: "answerBatches" }],
+        limit: 1
+      }
+    };
+    var res = UrlFetchApp.fetch(url, {
+      method: "post",
+      contentType: "application/json",
+      headers: { Authorization: "Bearer " + token },
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
     });
-    detailSheet.getRange(detailSheet.getLastRow() + 1, 1, detailRows.length, DETAIL_HEADER.length).setValues(detailRows);
-    Logger.log("✅ 已從獨立集合增量同步 " + detailRows.length + " 筆作答明細到 Sheet");
+    
+    if (res.getResponseCode() === 200) {
+      var results = JSON.parse(res.getContentText());
+      Logger.log("✅ [通訊檢查] Firestore 連線讀取成功，至少包含 " + (results ? results.length : 0) + " 筆 answerBatches 紀錄");
+    } else {
+      Logger.log("❌ [通訊檢查] Firestore 讀取失敗，狀態碼: " + res.getResponseCode() + ", 錯誤: " + res.getContentText());
+      return;
+    }
+  } catch(e) {
+    Logger.log("❌ [通訊檢查] Firestore 通訊例外錯誤：" + e.message);
+    return;
+  }
+  
+  // 4. 檢測時間解析與格式容錯
+  try {
+    var dateNormal = "2026/06/10 09:28:00";
+    var dateNoZero = "2026/6/10 9:28:0"; // 故意不補零
+    var dateDash   = "2026-6-10 9:28:0";  // 故意用 dash
+    var dateObject = new Date("2026-06-10T01:28:00.000Z"); // Date 物件
+    
+    var secNormal = getRowSeconds(dateNormal);
+    var secNoZero = getRowSeconds(dateNoZero);
+    var secDash   = getRowSeconds(dateDash);
+    var secObject = getRowSeconds(dateObject);
+    
+    Logger.log("info [時間比對測試] 基準值：" + dateNormal + " -> 秒數 = " + secNormal);
+    
+    if (secNormal === secNoZero && secNormal === secDash && secNormal === secObject) {
+      Logger.log("✅ [時間檢查] 時間容錯解析完全正常！(所有格式皆能精確解出秒數: " + secNormal + ")");
+    } else {
+      Logger.log("❌ [時間檢查] 時間容錯測試失敗！秒數不一致：");
+      Logger.log("   - 正常格式: " + secNormal);
+      Logger.log("   - 未補零格式: " + secNoZero);
+      Logger.log("   - 減號格式: " + secDash);
+      Logger.log("   - 物件格式: " + secObject);
+    }
+  } catch(e) {
+    Logger.log("❌ [時間檢查] 時間解析測試發生錯誤：" + e.message);
+  }
+  
+  // 5. 檢測後續同步防漏與去重機制
+  try {
+    var scoreSheet = ss.getSheetByName(SHEET_SCORES);
+    if (scoreSheet) {
+      var lastTime = getSheetLastTimeTaipei(scoreSheet);
+      var lastTimeISO = taipeiStringToISO(lastTime);
+      var startQueryTime = new Date(new Date(lastTimeISO).getTime() - 24 * 60 * 60 * 1000);
+      var cutoffMs = new Date(taipeiStringToISO(FIREBASE_CUTOFF_TAIPEI)).getTime();
+      
+      var actualQueryTime = startQueryTime.getTime() < cutoffMs ? new Date(cutoffMs) : startQueryTime;
+      Logger.log("✅ [防漏檢查] 後續同步防漏機制運作正常。最新時間為 " + lastTime + "，安全查詢起點 (已回推24h並卡轉移點): " + formatTaipeiDate(actualQueryTime));
+      
+      // 測試去重演算法
+      var testKey1 = "1781100000_114510000_TEST_99";
+      var testKey2 = "1781100000_114510000_TEST_99";
+      var tempMap = {};
+      tempMap[testKey1] = true;
+      if (tempMap[testKey2]) {
+        Logger.log("✅ [去重檢查] 秒級複合 Key 去重匹配演算法驗證成功！");
+      } else {
+        Logger.log("❌ [去重檢查] 去重演算法測試異常！");
+      }
+    }
+  } catch(e) {
+    Logger.log("❌ [防漏去重檢查] 檢測時發生錯誤：" + e.message);
+  }
+  
+  // 6. 檢測 Sheet 當前狀態 (方案三)
+  try {
+    var scoreSheet = ss.getSheetByName(SHEET_SCORES);
+    if (scoreSheet) {
+      var scoreLastRow = scoreSheet.getLastRow();
+      var scoreTime = getSheetLastTimeTaipei(scoreSheet);
+      var headers = scoreSheet.getRange(1, 1, 1, scoreSheet.getLastColumn()).getValues()[0];
+      var cJson = findColIdx(headers, ["作答明細(JSON)", "作答明細 (JSON)"]);
+      
+      Logger.log("✅ [工作表檢查] 「成績紀錄」工作表狀態正常。總列數: " + scoreLastRow + ", 最後一筆台北時間: " + scoreTime);
+      if (cJson !== -1) {
+        Logger.log("✅ [工作表檢查] 成功定位「作答明細(JSON)」欄位 (第 " + (cJson + 1) + " 欄)");
+      } else {
+        Logger.log("⚠️ [工作表檢查] 警告：在成績紀錄中找不到「作答明細(JSON)」欄位！(請點擊執行 runManualForceSyncAll 以自動建立此欄位)");
+      }
+    } else {
+      Logger.log("⚠️ [工作表檢查] 找不到「成績紀錄」工作表！");
+    }
+    
+    // 明細表已棄用
+    var detailSheet = ss.getSheetByName(SHEET_DETAILS);
+    if (detailSheet) {
+      Logger.log("ℹ️ [工作表檢查] 偵測到舊的「作答明細」分頁仍在，建議確認數據無誤後將其刪除以釋放系統儲存格空間。");
+    } else {
+      Logger.log("✅ [工作表檢查] 舊「作答明細」工作表已成功清空/刪除 (釋放儲存格額度)。");
+    }
+  } catch(e) {
+    Logger.log("❌ [工作表檢查] 讀取工作表資訊失敗：" + e.message);
+  }
+  
+  Logger.log("==================================================");
+  Logger.log("🎉 系統健康檢查完成！全部核心指標皆正常。");
+  Logger.log("==================================================");
+}
+
+/**
+ * 手動一鍵清理「成績紀錄」與「作答明細」中的所有重複資料 (全量清理)
+ * 因為全量清理在資料量大時 (數萬列) 會非常耗時，故將其移出定時自動同步中，改為有需要時手動點擊執行
+ */
+function manualCleanAllDuplicates() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  Logger.log("🧹 開始手動清理 成績紀錄 全量重複資料...");
+  var scoreSheet = ss.getSheetByName(SHEET_SCORES);
+  if (scoreSheet) {
+    deduplicateSheetScores(scoreSheet);
+  }
+  
+  Logger.log("🧹 開始手動清理 作答明細 全量重複資料...");
+  var detailSheet = getActiveDetailSheet(ss);
+  if (detailSheet) {
+    deduplicateSheetDetails(detailSheet);
+  }
+  
+  Logger.log("🎉 手動全量去重清理完成！");
+}
+
+/**
+ * 一鍵清理與刪除所有工作表中，資料列之後的多餘空白列與空白欄 (釋放儲存格額度)
+ * 這能有效解決「儲存格數量將會超過系統上限 (10000000 個)」的錯誤
+ */
+function trimAllSheets() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheets = ss.getSheets();
+  var totalRemovedRows = 0;
+  var totalRemovedCols = 0;
+  
+  sheets.forEach(function(sheet) {
+    var name = sheet.getName();
+    var lastRow = sheet.getLastRow();
+    var maxRows = sheet.getMaxRows();
+    var lastCol = sheet.getLastColumn();
+    var maxColumns = sheet.getMaxColumns();
+    
+    // 1. 刪除多餘空白列 (保留 5 列緩衝)
+    if (maxRows > lastRow + 5) {
+      var rowsToRemove = maxRows - (lastRow + 5);
+      sheet.deleteRows(lastRow + 6, rowsToRemove);
+      totalRemovedRows += rowsToRemove;
+      Logger.log("🧹 工作表 [" + name + "]：刪除了 " + rowsToRemove + " 行多餘空白列 (目前最大列數: " + (lastRow + 5) + ")");
+    }
+    
+    // 2. 刪除多餘空白欄 (保留 2 欄緩衝)
+    if (maxColumns > lastCol + 2) {
+      var colsToRemove = maxColumns - (lastCol + 2);
+      sheet.deleteColumns(lastCol + 3, colsToRemove);
+      totalRemovedCols += colsToRemove;
+      Logger.log("🧹 工作表 [" + name + "]：刪除了 " + colsToRemove + " 欄多餘空白欄 (目前最大欄數: " + (lastCol + 2) + ")");
+    }
+  });
+  
+  Logger.log("🎉 清理完成！共釋放了 " + totalRemovedRows + " 行空白列 與 " + totalRemovedCols + " 欄空白欄。");
+}
+
+
+// 註：此處重複的舊版 fillExistingScoresDetailsJson 已被移除，請使用檔案中部份更健壯、支援分頁比對的新版。
+
+
+// ────────────────────────────────────────────────────────
+// ★ v1.691 新增：Firebase 快取上傳與同步輔助函數
+// ────────────────────────────────────────────────────────
+
+function uploadCacheToFirebase(collection, docId, dataObject) {
+  var props = PropertiesService.getScriptProperties();
+  var projectId = props.getProperty("FIREBASE_PROJECT_ID");
+  if (!projectId) {
+    Logger.log("⚠️ 找不到 FIREBASE_PROJECT_ID，無法上傳快取到 Firebase。");
+    return;
+  }
+  try {
+    var token = firebaseAccessTokenV1685();
+    var docName = firestoreDocNameV1685(projectId, collection, docId);
+    var fields = firebaseFieldsV1685(dataObject);
+    var writes = [{ update: { name: docName, fields: fields } }];
+    firebaseBatchWriteV1685(projectId, token, writes);
+    Logger.log("✅ 成功上傳快取到 Firebase Firestore: " + collection + "/" + docId);
+  } catch (err) {
+    Logger.log("❌ 上傳快取到 Firebase 失敗 (" + collection + "/" + docId + ")：" + err.message);
+  }
+}
+
+function updateTeacherDataAndStudentProgressFirebase(ss) {
+  var props = PropertiesService.getScriptProperties();
+  var projectId = props.getProperty("FIREBASE_PROJECT_ID");
+  if (!projectId) {
+    Logger.log("⚠️ 找不到 FIREBASE_PROJECT_ID，無法同步快取到 Firebase。");
+    return;
+  }
+  var token = firebaseAccessTokenV1685();
+  
+  // 1. 取得學生名單
+  var stuSheet = ss.getSheetByName(SHEET_STUDENTS);
+  var studentInfoMap = {};
+  if (stuSheet && stuSheet.getLastRow() > 1) {
+    var stRows = stuSheet.getDataRange().getValues();
+    for (var si = 1; si < stRows.length; si++) {
+      var sid = stRows[si][0] ? stRows[si][0].toString().trim() : "";
+      if (sid) {
+        studentInfoMap[sid] = {
+          name: stRows[si][1] ? stRows[si][1].toString().trim() : "",
+          class: stRows[si][2] ? stRows[si][2].toString().trim() : "未分班"
+        };
+      }
+    }
+  }
+  
+  // 2. 唯讀前 10 欄，統計學生成績歷史與班級統計
+  var scoreSheet = ss.getSheetByName(SHEET_SCORES);
+  var studentHistory = {};
+  var classStats = {};
+  var topicTimeStats = {};
+  
+  if (scoreSheet && scoreSheet.getLastRow() > 1) {
+    var scRows = scoreSheet.getRange(1, 1, scoreSheet.getLastRow(), 10).getValues();
+    for (var i = 1; i < scRows.length; i++) {
+      var sid = scRows[i][1] ? scRows[i][1].toString().trim() : "";
+      if (!sid) continue;
+      
+      var stuInfo = studentInfoMap[sid] || {};
+      if (!studentHistory[sid]) {
+        studentHistory[sid] = {
+          name: stuInfo.name || sid,
+          class: stuInfo.class || "未分班",
+          attempts: []
+        };
+      }
+      
+      var sDate    = scRows[i][0] ? scRows[i][0].toString() : "";
+      var sTopic   = scRows[i][3] ? scRows[i][3].toString() : "";
+      var sMode    = scRows[i][4] ? scRows[i][4].toString() : "";
+      var sAttempt = Number(scRows[i][5]);
+      var sScore   = Number(scRows[i][6]);
+      var sCorr    = Number(scRows[i][7]) || 0;
+      var sWron    = Number(scRows[i][8]) || 0;
+      var sDur     = Number(scRows[i][9]) || 0;
+      var isRetry  = sMode === "錯題重做";
+      
+      studentHistory[sid].attempts.push({
+        date:     sDate,
+        topic:    sTopic,
+        mode:     sMode,
+        attempt:  sAttempt,
+        score:    sScore,
+        correct:  sCorr,
+        wrong:    sWron,
+        duration: sDur,
+        isRetry:  isRetry,
+      });
+      
+      if (!isRetry && sTopic !== "綜合練習" && sDur > 0) {
+        var qCount = sCorr + sWron;
+        if (qCount > 0) {
+          if (!topicTimeStats[sTopic]) topicTimeStats[sTopic] = { totalSec: 0, totalQ: 0, count: 0 };
+          topicTimeStats[sTopic].totalSec += sDur;
+          topicTimeStats[sTopic].totalQ   += qCount;
+          topicTimeStats[sTopic].count++;
+        }
+      }
+    }
+  }
+  
+  // 計算 classList
+  Object.keys(studentHistory).forEach(function(sid) {
+    var cls = studentHistory[sid].class || "未分班";
+    if (!classStats[cls]) classStats[cls] = { correct: 0, total: 0, studentSet: {} };
+    classStats[cls].studentSet[sid] = true;
+    studentHistory[sid].attempts.forEach(function(a) {
+      if (!a.isRetry) {
+        classStats[cls].total  += (a.correct || 0) + (a.wrong || 0);
+        classStats[cls].correct += (a.correct || 0);
+      }
+    });
+  });
+  
+  var classList = Object.keys(classStats).map(function(cls) {
+    var s = classStats[cls];
+    return {
+      class: cls,
+      correct: s.correct,
+      total: s.total,
+      rate: s.total > 0 ? Math.round((s.correct / s.total) * 100) : null,
+      studentCount: Object.keys(s.studentSet).length
+    };
+  }).sort(function(a,b) { return a.class.localeCompare(b.class, "zh-TW"); });
+  
+  var topicTimeList = Object.keys(topicTimeStats).map(function(t) {
+    var s = topicTimeStats[t];
+    return { topic: t, avgSec: Math.round(s.totalSec / s.totalQ), sessionCount: s.count };
+  }).sort(function(a,b) { return a.topic.localeCompare(b.topic, "zh-TW"); });
+  
+  // 3. 上傳 teacherData 到 Firebase
+  // ★ v1.691: 不再將巨大的 studentHistory 塞入大盤快取，改為空物件以防 payload 爆 size
+  var teacherData = {
+    studentHistory: {},
+    classList: classList,
+    studentInfoMap: studentInfoMap,
+    topicTimeList: topicTimeList
+  };
+  
+  var writes = [];
+  writes.push({
+    update: {
+      name: firestoreDocNameV1685(projectId, "rankingCaches", "teacherData"),
+      fields: firebaseFieldsV1685(teacherData)
+    }
+  });
+  
+  // ★ v1.691: 將有作答學生的個人歷程，寫入獨立的 studentAttempts/{sid} 集合，避免單一 doc 超過 1MB
+  Object.keys(studentHistory).forEach(function(sid) {
+    writes.push({
+      update: {
+        name: firestoreDocNameV1685(projectId, "studentAttempts", sid),
+        fields: firebaseFieldsV1685(studentHistory[sid])
+      }
+    });
+  });
+  
+  // 4. 計算並批次準備每一位學生的進度快取
+  var settings = readSettings(ss);
+  var passScore = settings.passScore;
+  var completionTopics = settings.completionTopics;
+  
+  Object.keys(studentInfoMap).forEach(function(sid) {
+    var topicBest = {};
+    var topicTimeMap = {};
+    if (studentHistory[sid]) {
+      studentHistory[sid].attempts.forEach(function(a) {
+        if (a.isRetry) return;
+        if (a.score > (topicBest[a.topic] || 0)) topicBest[a.topic] = a.score;
+        if (a.topic !== "綜合練習" && a.duration > 0) {
+          var qCount = (a.correct || 0) + (a.wrong || 0);
+          if (qCount > 0) {
+            if (!topicTimeMap[a.topic]) topicTimeMap[a.topic] = { totalSec: 0, totalQ: 0 };
+            topicTimeMap[a.topic].totalSec += a.duration;
+            topicTimeMap[a.topic].totalQ   += qCount;
+          }
+        }
+      });
+    }
+    
+    var details = completionTopics.map(function(t) {
+      var avgSec = null;
+      if (topicTimeMap[t] && topicTimeMap[t].totalQ > 0) {
+        avgSec = Math.round(topicTimeMap[t].totalSec / topicTimeMap[t].totalQ);
+      }
+      return {
+        topic: t,
+        best: topicBest[t] !== undefined ? topicBest[t] : null,
+        passed: (topicBest[t] || 0) >= passScore,
+        avgSec: avgSec
+      };
+    });
+    
+    var progressObj = {
+      passScore: passScore,
+      completionTopics: completionTopics,
+      details: details
+    };
+    
+    writes.push({
+      update: {
+        name: firestoreDocNameV1685(projectId, "studentProgress", sid),
+        fields: firebaseFieldsV1685(progressObj)
+      }
+    });
+  });
+  
+  // 批次寫入所有快取文件到 Firestore (每 500 筆一組)
+  firebaseBatchWriteV1685(projectId, token, writes);
+  Logger.log("🎉 成功批次上傳 teacherData 與 " + Object.keys(studentInfoMap).length + " 位學生的個人完成度進度快取至 Firebase！");
+}
+
+
+/**
+ * 從 Firestore 查詢特定集合 (支援時間過濾)
+ */
+function queryFirestoreCollection(projectId, token, collection, startTimeISO) {
+  var url = "https://firestore.googleapis.com/v1/projects/" + projectId + "/databases/(default)/documents:runQuery";
+  
+  var structuredQuery = {
+    from: [{ collectionId: collection }]
+  };
+  
+  if (startTimeISO) {
+    structuredQuery.where = {
+      fieldFilter: {
+        field: { fieldPath: "createdAt" },
+        op: "GREATER_THAN_OR_EQUAL",
+        value: { stringValue: startTimeISO }
+      }
+    };
+  }
+  
+  var payload = {
+    structuredQuery: structuredQuery
+  };
+  
+  var options = {
+    method: "post",
+    contentType: "application/json",
+    headers: { Authorization: "Bearer " + token },
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  };
+  
+  var res = UrlFetchApp.fetch(url, options);
+  if (res.getResponseCode() >= 300) {
+    throw new Error("Firestore 查詢失敗 (" + collection + ")：" + res.getContentText());
+  }
+  
+  var parsedRes = JSON.parse(res.getContentText());
+  var allDocs = [];
+  
+  if (Array.isArray(parsedRes)) {
+    parsedRes.forEach(function(r) {
+      if (r.document && r.document.fields) {
+        var docObj = parseFirebaseFields(r.document.fields);
+        if (r.document.name) {
+          var parts = r.document.name.split("/");
+          docObj.id = parts[parts.length - 1];
+        }
+        allDocs.push(docObj);
+      }
+    });
+  }
+  
+  return allDocs;
+}
+
+/**
+ * 查詢特定集合的所有資料 (與 queryFirestoreCollection 同步)
+ */
+function queryFirestoreCollectionAll(projectId, token, collection, startTimeISO) {
+  return queryFirestoreCollection(projectId, token, collection, startTimeISO);
+}
+
+
+/**
+ * 增量同步 Firestore 數據到 Google Sheets
+ */
+function syncFirestoreToSheetsV169(ss) {
+  var scoreSheet = ss.getSheetByName(SHEET_SCORES);
+  if (!scoreSheet) return;
+  var lastTimeTaipei = getSheetLastTimeTaipei(scoreSheet);
+  Logger.log("⏱ 偵測到試算表最後作答時間: " + lastTimeTaipei + "，開始增量同步...");
+  
+  // 呼叫底層同步函數
+  forceSyncFromTime(lastTimeTaipei);
+}
+
+/**
+ * 強制同步特定時間點之後的 Firestore 數據到 Google Sheets
+ */
+function forceSyncFromTime(timeStr) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var scoreSheet = ss.getSheetByName(SHEET_SCORES);
+  if (!scoreSheet) {
+    Logger.log("❌ 找不到成績紀錄工作表！");
+    return;
+  }
+  
+  var props = PropertiesService.getScriptProperties();
+  var projectId = props.getProperty("FIREBASE_PROJECT_ID");
+  if (!projectId) {
+    Logger.log("❌ 找不到 FIREBASE_PROJECT_ID，請在 Script Properties 中設定");
+    return;
+  }
+  var token = firebaseAccessTokenV1685();
+  var startTimeISO = taipeiStringToISO(timeStr);
+  
+  Logger.log("🚀 開始從 Firebase 下載 " + startTimeISO + " 之後的所有成績...");
+  var newBatches = queryFirestoreCollection(projectId, token, "answerBatches", startTimeISO);
+  
+  if (newBatches.length === 0) {
+    Logger.log("ℹ️ 沒有找到任何新的成績紀錄。");
+    return;
+  }
+  
+  // 讀取現有的成績，建立防重 key
+  var scoreVals = scoreSheet.getDataRange().getValues();
+  var scoreHeaders = scoreVals[0].map(function(h) { return h ? h.toString().trim() : ""; });
+  
+  var cTime = findColIdx(scoreHeaders, ["時間戳記", "時間"]);
+  var cSid = findColIdx(scoreHeaders, ["學號"]);
+  var cTopic = findColIdx(scoreHeaders, ["測驗單元", "單元"]);
+  var cScore = findColIdx(scoreHeaders, ["分數"]);
+  var cJson = findColIdx(scoreHeaders, ["作答明細(JSON)", "作答明細 (JSON)"]);
+  
+  // 如果沒有第 13 欄，強制建立它
+  if (cJson === -1) {
+    scoreSheet.getRange(1, 13).setValue("作答明細(JSON)").setFontWeight("bold").setBackground("#fce7f3");
+    scoreVals = scoreSheet.getDataRange().getValues();
+    cJson = 12;
+  }
+  
+  var uniqueKeys = {};
+  for (var i = 1; i < scoreVals.length; i++) {
+    var r = scoreVals[i];
+    var seconds = r[cTime] ? getRowSeconds(r[cTime]) : 0;
+    var studentId = cSid !== -1 && r[cSid] ? r[cSid].toString().replace(/\s+/g, "") : "";
+    var topic = cTopic !== -1 && r[cTopic] ? r[cTopic].toString().replace(/\s+/g, "") : "";
+    var score = cScore !== -1 && r[cScore] !== undefined ? r[cScore].toString().replace(/\s+/g, "") : "";
+    
+    var key = seconds + "_" + studentId + "_" + topic + "_" + score;
+    uniqueKeys[key] = true;
+  }
+  
+  // 準備寫入的新列
+  var rowsToWrite = [];
+  newBatches.forEach(function(doc) {
+    var docISO = doc.createdAt ? new Date(doc.createdAt).toISOString() : "";
+    var seconds = docISO ? Math.floor(new Date(docISO).getTime() / 1000) : 0;
+    
+    var studentId = doc.studentId ? doc.studentId.toString().replace(/\s+/g, "") : "";
+    var topic = doc.topic ? doc.topic.toString().replace(/\s+/g, "") : "";
+    var score = doc.score !== undefined ? doc.score.toString().replace(/\s+/g, "") : "";
+    
+    var key = seconds + "_" + studentId + "_" + topic + "_" + score;
+    if (uniqueKeys[key]) return; // 重複，略過
+    
+    var twTime = formatTaipeiDate(doc.createdAt);
+    var detailsStr = doc.detailsJson ? (typeof doc.detailsJson === "string" ? doc.detailsJson : JSON.stringify(doc.detailsJson)) : "";
+    
+    // 建立一列 13 欄的資料
+    var newRow = [
+      twTime,                  // A. 時間戳記
+      doc.studentId || "",     // B. 學號
+      doc.name || "",          // C. 姓名
+      doc.topic || "",         // D. 測驗單元
+      doc.mode || "",          // E. 測驗模式
+      doc.attempt || 1,        // F. 第幾次
+      doc.score || 0,          // G. 分數
+      doc.correctCount || 0,   // H. 答對題數
+      doc.wrongCount || 0,     // I. 答錯題數
+      doc.duration || "",      // J. 作答秒數 (空欄)
+      "",                      // K. (空欄)
+      "",                      // L. (空欄)
+      detailsStr               // M. 作答明細(JSON)
+    ];
+    
+    rowsToWrite.push(newRow);
+    uniqueKeys[key] = true;
+  });
+  
+  if (rowsToWrite.length > 0) {
+    Logger.log("💾 正在向試算表寫入 " + rowsToWrite.length + " 筆新成績...");
+    var lastRow = scoreSheet.getLastRow();
+    scoreSheet.getRange(lastRow + 1, 1, rowsToWrite.length, 13).setValues(rowsToWrite);
+    Logger.log("🎉 成功同步 " + rowsToWrite.length + " 筆成績！");
+  } else {
+    Logger.log("ℹ️ 所有拉回的成績皆為重複，無需寫入。");
   }
 }

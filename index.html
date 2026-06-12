@@ -361,7 +361,7 @@
 <!-- ★ 教師後台入口：藏在頁面底部，兩個「©」中間那個才是觸發點 -->
 <footer class="text-center py-4 mt-auto select-none">
     <span class="text-gray-200 text-xs">© 題庫系統</span>
-    <span class="text-gray-200 text-xs ml-2" id="version-badge" title="前端 v1.69 ／ Firebase-first">v1.69</span>
+    <span class="text-gray-200 text-xs ml-2" id="version-badge" title="前端 v1.691 ／ Firebase-first">v1.691</span>
     <button onclick="location.href='admin.html'"
             class="text-gray-200 text-xs ml-px hover:text-gray-300 focus:outline-none cursor-default"
             tabindex="-1" aria-hidden="true">©</button>
@@ -795,31 +795,71 @@ function getBrowserInfo() {
     return "其他";
 }
 
-// ★ v1.66 登入時取得 token，記錄備查（不再輪詢）
+// ★ v1.691 登入時取得 token，優先寫入 Firebase 直連以防 GAS 高併發卡死，並啟用 Firebase 即時踢人監聽
+let loginStatesListener = null;
+
 async function loginWithToken(sid, name) {
     const ip      = await fetchClientIP();
     const device  = getDeviceInfo();
     const browser = getBrowserInfo();
     try {
-        const res = await postGAS({ action: "loginStudent", studentId: sid, name, ip, device, browser });
-        if (res.status === "kicked") {
-            showKicked();
-            return false;
-        }
-        if (res.status === "ok" && res.token) {
-            sessionToken = res.token;
-            clientIP     = ip;  // ★ 存下 IP 供後續送分用
+        if (window.Firebase1685 && window.Firebase1685.isEnabled()) {
+            await window.Firebase1685.ensureSignedIn();
+            const db = window.firebase.firestore();
+            const token = sid + "_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
+            const c = window.FIREBASE_V18_CONFIG?.collections || {};
+            const collName = c.loginStates || "loginStates";
+            
+            // 寫入此學生的唯一 active token
+            await db.collection(collName).doc(sid).set({
+                studentId: sid,
+                name: name,
+                token: token,
+                ip: ip,
+                device: device,
+                browser: browser,
+                loginTime: window.firebase.firestore.FieldValue.serverTimestamp(),
+                status: "active"
+            }, { merge: true });
+            
+            // 掛上即時監聽，一旦別的瀏覽器登入寫入新 token，此端會立刻被踢
+            if (loginStatesListener) loginStatesListener();
+            loginStatesListener = db.collection(collName).doc(sid).onSnapshot(doc => {
+                if (doc.exists) {
+                    const data = doc.data();
+                    if (data.token !== token) {
+                        showKicked();
+                    }
+                }
+            });
+            
+            sessionToken = token;
+            clientIP     = ip;
             return true;
+        } else {
+            // Fallback 到舊有 GAS 模式
+            const res = await postGAS({ action: "loginStudent", studentId: sid, name, ip, device, browser });
+            if (res.status === "ok" && res.token) {
+                sessionToken = res.token;
+                clientIP     = ip;
+                return true;
+            }
         }
         return false;
     } catch(e) { console.warn("loginWithToken 失敗", e); return false; }
 }
 
 // ★ v1.66 已移除 Session 輪詢（改為重複登入記錄）
-function stopSessionPolling() { /* 保留空函式避免其他地方呼叫出錯 */ }
+function stopSessionPolling() { 
+    if (loginStatesListener) {
+        loginStatesListener();
+        loginStatesListener = null;
+    }
+}
 
 function showKicked() {
     isLoggedIn = false;
+    stopSessionPolling();
     ["loading-section","error-section","login-section","ranking-section","topic-section",
      "quiz-section","flashcard-loading-section","flashcard-section","flashcard-done-section",
      "result-section","submitting-section"].forEach(id => {
@@ -831,6 +871,10 @@ function showKicked() {
 
 async function verifySessionOnce() {
     if (!studentId || !sessionToken) return true;
+    if (window.Firebase1685 && window.Firebase1685.isEnabled()) {
+        // 在 Firebase 模式下有 onSnapshot 即時踢人，不需再透過網路 API 驗證
+        return true;
+    }
     try {
         const res = await postGAS({ action: "verifySession", studentId, token: sessionToken });
         if (res.valid === false || res.status === "kicked") {
@@ -1586,6 +1630,22 @@ function showResults(scoreCorrect) {
         details,
         isRetryMode
     }, "save-status");
+
+    // ★ v1.691 樂觀更新 (Optimistic Update) 本地進度快取，考完立刻看見分數與達標變化
+    if (myProgressCache && !isRetryMode && currentSelectedTopic !== "綜合練習") {
+        const passScore = myProgressCache.passScore || 60;
+        let topicDetail = myProgressCache.details.find(d => d.topic === currentSelectedTopic);
+        if (!topicDetail) {
+            topicDetail = { topic: currentSelectedTopic, best: 0, passed: false, avgSec: null };
+            myProgressCache.details.push(topicDetail);
+        }
+        if (scoreCalc > (topicDetail.best || 0)) {
+            topicDetail.best = scoreCalc;
+            topicDetail.passed = scoreCalc >= passScore;
+            renderMyCompletion(myProgressCache);
+            renderTopics();
+        }
+    }
 }
 
 function renderReviewList() {
@@ -1910,19 +1970,46 @@ function maskName(name) {
 let rankingData = null; // 快取排行資料
 
 // ── 個人完成度 ────────────────────────────────
+let myProgressCache = null;
+
 async function loadMyCompletion() {
     try {
+        if (window.Firebase1685 && window.Firebase1685.isEnabled()) {
+            await window.Firebase1685.ensureSignedIn();
+            const db = window.firebase.firestore();
+            const c = window.FIREBASE_V18_CONFIG?.collections || {};
+            const collName = c.studentProgress || "studentProgress";
+            
+            const docSnap = await db.collection(collName).doc(studentId).get();
+            if (docSnap.exists) {
+                const data = docSnap.data();
+                myProgressCache = {
+                    status: "ok",
+                    passScore: data.passScore || completionSettings.passScore || 60,
+                    completionTopics: data.completionTopics || completionSettings.completionTopics || [],
+                    details: data.details || []
+                };
+            } else {
+                myProgressCache = {
+                    status: "ok",
+                    passScore: completionSettings.passScore || 60,
+                    completionTopics: completionSettings.completionTopics || [],
+                    details: (completionSettings.completionTopics || []).map(t => ({
+                        topic: t, best: null, passed: false, avgSec: null
+                    }))
+                };
+            }
+            renderMyCompletion(myProgressCache);
+            return;
+        }
+        
         const res = await postGAS({ action: "getMyCompletion", studentId });
         if (res.status !== "ok") {
             const summary = document.getElementById("my-completion-summary");
             if (summary) summary.classList.add("hidden");
             return;
         }
-        if (!res.completionTopics?.length) {
-            const summary = document.getElementById("my-completion-summary");
-            if (summary) summary.classList.add("hidden");
-            return;
-        }
+        myProgressCache = res;
         renderMyCompletion(res);
     } catch(e) {
         console.warn("個人完成度載入失敗", e);
@@ -1966,11 +2053,38 @@ function renderMyCompletion(data) {
 
 async function loadCompletionRanking(todayOnly = false) {
     try {
+        if (window.Firebase1685 && window.Firebase1685.isEnabled()) {
+            await window.Firebase1685.ensureSignedIn();
+            const db = window.firebase.firestore();
+            const docSnap = await db.collection("rankingCaches").doc("home").get();
+            if (docSnap.exists) {
+                const res = docSnap.data();
+                res.status = "ok";
+                rankingData = res;
+                if (todayOnly) {
+                    document.querySelectorAll("#ranking-list .student-row").forEach((row, idx) => {
+                        const cls = rankingData.ranking[idx];
+                        if (!cls) return;
+                        const todayCnt = (res.todayByClass && res.todayByClass[cls.class]) || 0;
+                        const span = row.querySelector(".today-cnt");
+                        if (span) span.textContent = todayCnt;
+                    });
+                    const totalEl = document.querySelector("#ranking-list .today-total");
+                    if (totalEl) totalEl.textContent = res.todayTotal ?? 0;
+                    return;
+                }
+                if (isLoggedIn) return;
+                hide("ranking-skeleton");
+                show("ranking-list");
+                renderRankingSection(res);
+                return;
+            }
+        }
+
         const res = await postGAS({ action: "getCompletionRanking" });
         if (res.status !== "ok") return;
         rankingData = res;
         if (todayOnly) {
-            // ★ 只更新今日練習人數，不重新渲染全部排行
             document.querySelectorAll("#ranking-list .student-row").forEach((row, idx) => {
                 const cls = rankingData.ranking[idx];
                 if (!cls) return;
@@ -1978,7 +2092,6 @@ async function loadCompletionRanking(todayOnly = false) {
                 const span = row.querySelector(".today-cnt");
                 if (span) span.textContent = todayCnt;
             });
-            // 更新總計
             const totalEl = document.querySelector("#ranking-list .today-total");
             if (totalEl) totalEl.textContent = res.todayTotal ?? 0;
             return;
@@ -2068,10 +2181,7 @@ function renderRankingSection(data) {
     </div>`;
 
     document.getElementById("ranking-list").innerHTML = headerRow + rows + totalRow;
-}
-
-
-// ★ 共用：熱圖表格（桌機）
+}// ★ 共用：熱圖表格（桌機）
 function renderHeatmapTable(students, topics, passScore, onCellClick, onNameClick) {
     const thCols = topics.map(t => {
         const short = t.length > 10 ? t.slice(0,10)+"…" : t;
@@ -2238,16 +2348,34 @@ async function openRankingClassView(className) {
     if (!rankingData) return;
     let cls = rankingData.ranking.find(r => r.class === className);
     if (!cls) return;
-
     if (!cls.students) {
         try {
-            const res = await postGAS({ action: "getClassStudents", className });
-            if (res.status === "ok" && res.students) {
-                cls = Object.assign({}, cls, { students: res.students });
-            } else return;
-        } catch(e) { return; }
+            if (window.Firebase1685 && window.Firebase1685.isEnabled()) {
+                await window.Firebase1685.ensureSignedIn();
+                const db = window.firebase.firestore();
+                const docSnap = await db.collection("rankingClasses").doc(className).get();
+                if (docSnap.exists) {
+                    const classData = docSnap.data();
+                    cls = Object.assign({}, cls, { students: classData.students || [] });
+                } else {
+                    throw new Error("Firebase 班級資料未生成");
+                }
+            } else {
+                const res = await postGAS({ action: "getClassStudents", className });
+                if (res.status === "ok" && res.students) {
+                    cls = Object.assign({}, cls, { students: res.students });
+                } else return;
+            }
+        } catch(e) {
+            console.warn("載入班級學生資料失敗，嘗試 Fallback...", e);
+            try {
+                const res = await postGAS({ action: "getClassStudents", className });
+                if (res.status === "ok" && res.students) {
+                    cls = Object.assign({}, cls, { students: res.students });
+                } else return;
+            } catch(err) { return; }
+        }
     }
-
     document.getElementById("ranking-list").classList.add("hidden");
     const view = document.getElementById("ranking-student-view");
     view.classList.remove("hidden");

@@ -349,7 +349,7 @@
 <!-- ★ 教師後台入口：藏在頁面底部，兩個「©」中間那個才是觸發點 -->
 <footer class="text-center py-4 mt-auto select-none">
     <span class="text-gray-200 text-xs">© 題庫系統</span>
-    <span class="text-gray-200 text-xs ml-2" id="version-badge" title="後台 v1.69 ／ 適配 GAS v9-690 + Firebase">v1.69</span>
+    <span class="text-gray-200 text-xs ml-2" id="version-badge" title="後台 v1.691 ／ 適配 GAS v9-690 + Firebase">v1.691</span>
     <button onclick="tryOpenAdminModal()"
             class="text-gray-200 text-xs ml-px hover:text-gray-300 focus:outline-none cursor-default"
             tabindex="-1" aria-hidden="true">©</button>
@@ -940,7 +940,7 @@ let teacherData       = null;
 
 document.addEventListener('DOMContentLoaded', () => {
     fetchQuestionBank().then(() => {
-        document.title = "教師後台 - 題庫系統 v1.69";
+        document.title = "教師後台 - 題庫系統 v1.691";
         setTimeout(() => {
             if (typeof openAdminModal === "function") openAdminModal();
         }, 250);
@@ -2693,24 +2693,34 @@ function closeTeacherPortal() {
     document.body.style.overflow = "";
     loggedInAdminName = "";
 }
-
 async function loadTeacherData() {
     show("teacher-loading"); hide("teacher-error"); hide("teacher-content");
-    // ★ 重新整理時重置懶載入狀態
     detailStatsLoaded  = false;
     detailStatsLoading = false;
     try {
-        const res = await postGAS({ action: "getTeacherData" });
+        let res = null;
+        if (window.Firebase1685 && window.Firebase1685.isEnabled()) {
+            await window.Firebase1685.ensureSignedIn();
+            const db = window.firebase.firestore();
+            const docSnap = await db.collection("rankingCaches").doc("teacherData").get();
+            if (docSnap.exists) {
+                res = docSnap.data();
+                res.status = "ok";
+            }
+        }
+        
+        if (!res) {
+            res = await postGAS({ action: "getTeacherData" });
+        }
+        
         if (res.status !== "ok") throw new Error(res.message || "讀取失敗");
         teacherData = res;
-        // 初始化空值，避免前端存取到 undefined
         teacherData.questionStats       = teacherData.questionStats       || [];
         teacherData.topicStats          = teacherData.topicStats          || [];
         teacherData.studentWrongDetails = teacherData.studentWrongDetails || {};
         hide("teacher-loading");
         renderTeacherDashboard(res);
         show("teacher-content");
-        // ★ 顯示「需載入」badge 提示詳細資料尚未載入
         ["tab-question-badge","tab-topic-badge"].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.classList.remove("hidden");
@@ -2721,7 +2731,6 @@ async function loadTeacherData() {
         show("teacher-error");
     }
 }
-
 let currentClassFilter = "ALL"; // 題目難度分析的分類篩選
 let currentCogFilter   = "ALL"; // 題目難度分析的認知類型篩選
 
@@ -2909,12 +2918,36 @@ function closeClassView() {
     document.getElementById("class-list").classList.remove("hidden");
 }
 
-// ★ 點入學生：傳入 sid + topic，只顯示該單元的歷程
-function openClassStudentDetail(sid, filterTopic) {
-    const info     = teacherData?.studentHistory?.[sid];
+// ★ 點入學生：傳入 sid + topic，只顯示該單元的歷程 (支援 studentAttempts 異步載入)
+async function openClassStudentDetail(sid, filterTopic) {
+    let info = teacherData?.studentHistory?.[sid];
+    if (!info) {
+        try {
+            const db = firebase.firestore();
+            const docSnap = await db.collection("studentAttempts").doc(sid).get();
+            if (docSnap.exists()) {
+                if (!teacherData.studentHistory) teacherData.studentHistory = {};
+                teacherData.studentHistory[sid] = docSnap.data();
+                info = teacherData.studentHistory[sid];
+            }
+        } catch (err) {
+            console.warn("載入學生歷程失敗：", err);
+        }
+    }
+    if (!info) {
+        // Fallback
+        const infoMap = teacherData?.studentInfoMap?.[sid] || {};
+        info = {
+            name: infoMap.name || sid,
+            class: infoMap.class || "未分班",
+            attempts: []
+        };
+        if (!teacherData.studentHistory) teacherData.studentHistory = {};
+        teacherData.studentHistory[sid] = info;
+    }
+
     const wrongArr = (teacherData?.studentWrongDetails?.[sid] || [])
                        .filter(q => !filterTopic || q.topic === filterTopic);
-    if (!info) return;
 
     document.getElementById("class-student-list").classList.add("hidden");
     const detail = document.getElementById("class-student-detail");
@@ -3337,14 +3370,27 @@ function analysisCell(v) {
     if (v === null || v === undefined || v === "") return "—";
     return String(v).replace(/[&<>"']/g, ch => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[ch]));
 }
-
 async function loadAnalysisCache(force) {
     if (analysisCacheLoading) return;
     analysisCacheLoading = true;
     const list = document.getElementById("analysis-cache-list");
     if (list) list.innerHTML = `<div class="text-center py-12 text-gray-400 text-sm">載入分析快取中...</div>`;
     try {
-        const res = await postGAS({ action: "getAnalysisCache", force: force === true });
+        let res = null;
+        if (force !== true && window.Firebase1685 && window.Firebase1685.isEnabled()) {
+            await window.Firebase1685.ensureSignedIn();
+            const db = window.firebase.firestore();
+            const docSnap = await db.collection("rankingCaches").doc("analysisCaches").get();
+            if (docSnap.exists) {
+                res = docSnap.data();
+                res.status = "ok";
+            }
+        }
+        
+        if (!res) {
+            res = await postGAS({ action: "getAnalysisCache", force: force === true });
+        }
+        
         if (res.status !== "ok") throw new Error(res.message || "載入失敗");
         analysisCacheData = {
             classCategory: res.classCategory || [],
@@ -3362,7 +3408,6 @@ async function loadAnalysisCache(force) {
         if (list) list.innerHTML = `<div class="text-center py-12 text-red-500 text-sm">載入失敗：${analysisCell(e.message)}</div>`;
     }
 }
-
 function refreshAnalysisCache() {
     analysisCacheLoaded = false;
     loadAnalysisCache(true);
