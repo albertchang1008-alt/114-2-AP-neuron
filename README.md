@@ -77,3 +77,18 @@ cd "/Users/HHC/Documents/New project/題庫系統修正版-2026-06-05-v1.69"
 
 若出現「正確答案不在選項中」，請檢查 Google Sheet 題庫的「正確答案」欄是否能對應到四個選項之一，然後重新同步到 Firebase。
 
+## 題目 ID 與 Firebase 文件 ID
+
+Google Sheet 的 M 欄「題目ID」可以在不同分類重複使用。v1.691 同步到 Firebase 時會另外產生 `firebaseQuestionId`：
+
+```text
+分類__題目ID
+```
+
+Firestore 題庫文件會寫成：
+
+```text
+questions/{firebaseQuestionId}
+```
+
+前端分析顯示仍保留原本的 `id`，也就是表格中的題目ID；但學生進度與錯題紀錄會用 `firebaseQuestionId` 當唯一鍵，避免不同分類中相同題目ID互相覆蓋。

@@ -1365,6 +1365,8 @@ async function loadTopicQuestions(topic, flashcard) {
 
     allQuestionsData = data.map((item, idx) => ({
         id:      item.id      || `Q_${idx}`,
+        firebaseQuestionId: item.firebaseQuestionId || item.docId || item.id || `Q_${idx}`,
+        originalQuestionId: item.originalQuestionId || item.id || "",
         top:     item.top     || "未分類",
         q:       item.q,
         options: item.options || [],
@@ -1387,7 +1389,7 @@ async function startRetry() {
     // 完成度已整合進 topic-section
     const srcs = quizSession
         .filter(q => !q.isCorrectlyAnswered)
-        .map(q => allQuestionsData.find(o => o.id === q.id))
+        .map(q => allQuestionsData.find(o => (o.firebaseQuestionId || o.id) === (q.firebaseQuestionId || q.id)))
         .filter(Boolean);
     prepareQuiz(srcs);
 }
@@ -1396,6 +1398,8 @@ function prepareQuiz(sources) {
     // 建立 Session：每題洗牌選項；答案只供本地判分，不在作答中顯示
     quizSession = shuffle(sources.map(src => ({
         id:             src.id,
+        firebaseQuestionId: src.firebaseQuestionId || src.id,
+        originalQuestionId: src.originalQuestionId || src.id,
         top:            src.top,
         q:              src.q,
         shuffledOpts:   shuffle([...src.options]),
@@ -1516,10 +1520,10 @@ async function submitQuiz() {
         if (res.status !== "ok") throw new Error(res.message || "判題失敗");
 
         // 將判題結果寫回 quizSession
-        const resultMap = new Map(res.results.map(r => [r.questionId, r]));
+        const resultMap = new Map(res.results.map(r => [r.questionFirebaseId || r.questionId, r]));
         let scoreCorrect = 0;
         quizSession.forEach(q => {
-            const r = resultMap.get(q.id);
+            const r = resultMap.get(q.firebaseQuestionId || q.id);
             if (r) {
                 q.isCorrectlyAnswered = r.correct;
                 q.serverCorrectText   = r.correctText  || "";
@@ -1562,6 +1566,7 @@ function judgeBatchLocally() {
         q.userSelectedText = selectedText;
         results.push({
             questionId: q.id,
+            questionFirebaseId: q.firebaseQuestionId || q.id,
             correct: selectedNorm === correctNorm,
             correctText: q.ans || "",
             correctIndex,
@@ -1618,6 +1623,7 @@ function showResults(scoreCorrect) {
 
     const details = quizSession.map(q => ({
         questionId:   q.id,
+        questionFirebaseId: q.firebaseQuestionId || q.id,
         questionText: q.q,
         topic:        q.top,
         selectedText: q.userSelectedText || q.shuffledOpts[q.userSelectedIndex] || "未作答",
@@ -1868,10 +1874,12 @@ function fcSelectOption(clickedBtn, selectedOpt, q) {
 
         // ★ 只記錄每題第一次作答（避免重複計分）
         const qId = q.id || q.q;
-        if (!fcFirstAttempts[qId]) {
-            fcFirstAttempts[qId] = true;
+        const qFirebaseId = q.firebaseQuestionId || q.id || q.q;
+        if (!fcFirstAttempts[qFirebaseId]) {
+            fcFirstAttempts[qFirebaseId] = true;
             fcAnswerLog.push({
                 questionId:   q.id   || "",
+                questionFirebaseId: qFirebaseId,
                 questionText: q.q    || "",
                 topic:        q.top  || fcTopic || "",
                 selectedText: selectedOpt || "",
@@ -2551,7 +2559,10 @@ async function loadWrongFcCount() {
 
         // 合併去重（以 id 為 key）
         const qMap = new Map();
-        [...currentWrong, ...firebaseWrong].forEach(q => { if (q.id && !qMap.has(q.id)) qMap.set(q.id, q); });
+        [...currentWrong, ...firebaseWrong].forEach(q => {
+            const key = q.firebaseQuestionId || q.id;
+            if (key && !qMap.has(key)) qMap.set(key, q);
+        });
         let allWrong = shuffle([...qMap.values()]);
 
         // 題數上限
@@ -2599,6 +2610,8 @@ let fcWrongQuestions = []; // 從 Firebase 取得的歷史錯題
 function normalizePracticeQuestion(item, idx = 0) {
     return {
         id: item.id || item.questionId || `Q_${idx}`,
+        firebaseQuestionId: item.firebaseQuestionId || item.questionFirebaseId || item.docId || item.id || item.questionId || `Q_${idx}`,
+        originalQuestionId: item.originalQuestionId || item.id || item.questionId || "",
         top: item.top || item.topic || "未分類",
         q: item.q || item.questionText || "",
         options: Array.isArray(item.options) ? item.options : [],

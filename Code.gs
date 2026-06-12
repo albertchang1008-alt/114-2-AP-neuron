@@ -134,6 +134,18 @@ function normalizeAnswerTextV1685(rawAns, opts) {
   return raw;
 }
 
+function makeFirebaseQuestionIdV169(topic, questionId, rowNumber, seenMap) {
+  var top = topic ? topic.toString().trim() : "未分類";
+  var qid = questionId ? questionId.toString().trim() : ("ROW_" + rowNumber);
+  var base = top + "__" + qid;
+  if (!seenMap[base]) {
+    seenMap[base] = 1;
+    return base;
+  }
+  seenMap[base] += 1;
+  return base + "__ROW_" + rowNumber;
+}
+
 function readQuestionsForFirebaseV1685(ss) {
   var sheet = ss.getSheetByName(SHEET_QUESTIONS);
   if (!sheet || sheet.getLastRow() <= 1) return [];
@@ -154,6 +166,7 @@ function readQuestionsForFirebaseV1685(ss) {
   var version = "QB_" + sheet.getLastRow() + "_" + Utilities.formatDate(new Date(), "Asia/Taipei", "yyyyMMddHHmmss");
   var out = [];
   var lastImgUrl = "";
+  var seenFirebaseIds = {};
   for (var i = 1; i < rows.length; i++) {
     var r = rows[i];
     var qText = iQ !== -1 && r[iQ] ? r[iQ].toString().trim() : "";
@@ -170,9 +183,14 @@ function readQuestionsForFirebaseV1685(ss) {
       iD !== -1 && r[iD] ? r[iD].toString().trim() : ""
     ].filter(Boolean);
     var qId = iId !== -1 && r[iId] ? r[iId].toString().trim() : "ROW_" + (i + 1);
+    var top = iTop !== -1 && r[iTop] ? r[iTop].toString().trim() : "未分類";
+    var firebaseQuestionId = makeFirebaseQuestionIdV169(top, qId, i + 1, seenFirebaseIds);
     out.push({
       id: qId,
-      top: iTop !== -1 && r[iTop] ? r[iTop].toString().trim() : "未分類",
+      firebaseQuestionId: firebaseQuestionId,
+      originalQuestionId: qId,
+      sourceRow: i + 1,
+      top: top,
       q: qText,
       options: opts,
       ans: normalizeAnswerTextV1685(iAns !== -1 ? r[iAns] : "", opts),
@@ -257,7 +275,9 @@ function buildRankingCacheForFirebaseV1685(ss) {
   cached.todayTotal = todayCache.todayTotal;
   cached.todayByClass = todayCache.todayByClass;
   cached.todayDate = todayCache.todayDate;
+  cached.updatedAt = todayCache.updatedAt; // ★ 對齊時間屬性
   cached.todayUpdatedAt = todayCache.updatedAt;
+  cached.todayStudents = todayCache.todayStudents || [];
   cached.updatedAtText = localNow();
   return cached;
 }
@@ -325,6 +345,21 @@ function firestoreDocNameV1685(projectId, collection, id) {
 
 function firebaseBatchWriteV1685(projectId, token, writes) {
   if (!writes.length) return;
+  var writeMap = {};
+  var compacted = [];
+  writes.forEach(function(w) {
+    var name = w && w.update && w.update.name ? w.update.name : "";
+    if (!name) {
+      compacted.push(w);
+      return;
+    }
+    if (!writeMap[name]) compacted.push(w);
+    writeMap[name] = w;
+  });
+  writes = compacted.map(function(w) {
+    var name = w && w.update && w.update.name ? w.update.name : "";
+    return name && writeMap[name] ? writeMap[name] : w;
+  });
   var url = "https://firestore.googleapis.com/v1/projects/" + projectId + "/databases/(default)/documents:batchWrite";
   for (var i = 0; i < writes.length; i += 100) {
     var res = UrlFetchApp.fetch(url, {
@@ -352,7 +387,7 @@ function handleSyncFirebaseV1685(payload) {
     writes.push({ update: { name: firestoreDocNameV1685(projectId, "rankingCaches", "home"), fields: firebaseFieldsV1685(data.rankingCache) } });
   }
   data.questions.forEach(function(q) {
-    writes.push({ update: { name: firestoreDocNameV1685(projectId, "questions", q.id), fields: firebaseFieldsV1685(q) } });
+    writes.push({ update: { name: firestoreDocNameV1685(projectId, "questions", q.firebaseQuestionId || q.id), fields: firebaseFieldsV1685(q) } });
   });
   data.students.forEach(function(s) {
     writes.push({ update: { name: firestoreDocNameV1685(projectId, "students", s.studentId), fields: firebaseFieldsV1685(s) } });
@@ -1186,7 +1221,10 @@ function handleGetCompletionRanking(payload) {
       cached.todayTotal = todayCache.todayTotal;
       cached.todayByClass = todayCache.todayByClass;
       cached.todayDate = todayCache.todayDate;
+      cached.updatedAt = todayCache.updatedAt; // ★ 對齊時間屬性
       cached.todayUpdatedAt = todayCache.updatedAt;
+      cached.todayStudents = todayCache.todayStudents || [];
+      cached.updatedAtText = localNow(); // ★ 對齊時間屬性
       return jsonResponse(cached);
     }
   }
@@ -1248,7 +1286,10 @@ function handleGetCompletionRanking(payload) {
   result.todayTotal = todayCache2.todayTotal;
   result.todayByClass = todayCache2.todayByClass;
   result.todayDate = todayCache2.todayDate;
+  result.updatedAt = todayCache2.updatedAt; // ★ 對齊時間屬性
   result.todayUpdatedAt = todayCache2.updatedAt;
+  result.todayStudents = todayCache2.todayStudents || [];
+  result.updatedAtText = localNow(); // ★ 對齊時間屬性
 
   // 快取只存班級摘要（不含 students）
   var rankingForCache = ranking.map(function(r) {
@@ -1555,7 +1596,7 @@ function buildStudentClassMap(ss) {
 function computeTodayPracticeCounts(ss) {
   var now = new Date();
   var todayStr = Utilities.formatDate(now, "Asia/Taipei", "yyyy/MM/dd");
-  var studentClassMap = buildStudentClassMap(ss);
+  var studentInfoMap = buildStudentInfoMap(ss); // 改為讀取完整學生對照表
   var todaySet = {};
   var scoreSheet = ss.getSheetByName(SHEET_SCORES);
 
@@ -1587,22 +1628,32 @@ function computeTodayPracticeCounts(ss) {
         var dateStr = Utilities.formatDate(d, "Asia/Taipei", "yyyy/MM/dd");
         var sid = r[1] ? r[1].toString().trim() : "";
         if (dateStr === todayStr && sid && !todaySet[sid]) {
-          todaySet[sid] = studentClassMap[sid] || "未分班";
+          var stu = studentInfoMap[sid] || {};
+          todaySet[sid] = stu.class || "未分班";
         }
       }
     });
   }
 
   var todayByClass = {};
+  var todayStudents = [];
   Object.keys(todaySet).forEach(function(sid) {
     var cls = todaySet[sid] || "未分班";
     todayByClass[cls] = (todayByClass[cls] || 0) + 1;
+    
+    var stu = studentInfoMap[sid] || {};
+    todayStudents.push({
+      studentId: sid,
+      name: stu.name || "未知",
+      class: cls
+    });
   });
 
   return {
     todayDate: todayStr,
     todayTotal: Object.keys(todaySet).length,
     todayByClass: todayByClass,
+    todayStudents: todayStudents, // ★ 新增今日練習學生詳細名單
     updatedAt: localNow()
   };
 }
@@ -1618,7 +1669,7 @@ function writeTodayPracticeCache(ss) {
     ["更新時間", data.updatedAt],
     ["日期", data.todayDate],
     ["今日總人數", data.todayTotal],
-    ["", ""],
+    ["今日練習名單JSON", JSON.stringify(data.todayStudents || [])], // ★ 以 JSON 格式把今日學生名單藏在此列
     ["班級", "今日練習人數"]
   ];
   Object.keys(data.todayByClass).sort(function(a, b) {
@@ -1640,16 +1691,22 @@ function readTodayPracticeCache(ss) {
 
   var values = sheet.getRange(1, 1, sheet.getLastRow(), 2).getValues();
   var result = { todayDate: "", todayTotal: 0, todayByClass: {}, updatedAt: "" };
+  result.todayStudents = [];
   for (var i = 0; i < values.length; i++) {
     var key = values[i][0] ? values[i][0].toString() : "";
     var val = values[i][1];
     if (key === "更新時間") result.updatedAt = val ? val.toString() : "";
     if (key === "日期") result.todayDate = val ? val.toString() : "";
     if (key === "今日總人數") result.todayTotal = Number(val) || 0;
+    if (key === "今日練習名單JSON") result.todayStudents = val ? JSON.parse(val.toString()) : [];
     if (i >= 6 && key) result.todayByClass[key] = Number(val) || 0;
   }
   if (!result.todayDate) result.todayDate = empty.todayDate;
   if (result.todayDate !== empty.todayDate) return writeTodayPracticeCache(ss);
+  // ★ v1.691 防禦性修復：若今日總人數 > 0，但學生名單快取卻是空的（舊快取未存此欄），強制重建今日快取
+  if (result.todayTotal > 0 && (!result.todayStudents || result.todayStudents.length === 0)) {
+    return writeTodayPracticeCache(ss);
+  }
   return result;
 }
 
@@ -1762,8 +1819,9 @@ function buildAndSaveAnalysisCaches(ss) {
     return { classCategory: 0, studentCategory: 0, questionType: 0, questionStats: 0, updatedAt: updatedAt };
   }
   
-  var rows = scoreSheet.getDataRange().getValues();
-  var headers = rows[0].map(function(h) { return h ? h.toString().trim() : ""; });
+  var lastRow = scoreSheet.getLastRow();
+  // 唯讀第一列來抓取標頭定義
+  var headers = scoreSheet.getRange(1, 1, 1, scoreSheet.getLastColumn()).getValues()[0].map(function(h) { return h ? h.toString().trim() : ""; });
   
   var cSid = findColIdx(headers, ["學號"]);
   var cName = findColIdx(headers, ["姓名"]);
@@ -1774,7 +1832,25 @@ function buildAndSaveAnalysisCaches(ss) {
   // 僅分析最近 7 天之內的紀錄以防 OOM
   var cutoffTime = new Date().getTime() - 7 * 24 * 60 * 60 * 1000;
   
-  for (var i = 1; i < rows.length; i++) {
+  // ★ v1.691: 局部載入優化！由後往前掃描，定位出最近 7 天內的第一行行號，避免一次讀取 3 萬多列巨大 JSON 導致下載超時！
+  var times = scoreSheet.getRange(1, 1, lastRow, 1).getValues();
+  var startRow = 2; // 預設從第 2 行開始
+  for (var t = lastRow - 1; t >= 1; t--) {
+    var timeVal = times[t][0];
+    var sTime = timeVal ? getRowSeconds(timeVal) * 1000 : 0;
+    if (sTime > 0 && sTime < cutoffTime) {
+      startRow = t + 2; // t 是 0-indexed index，對應的試算表行是 t + 1，因此 7 天內第一筆為 t + 2
+      break;
+    }
+  }
+  
+  var rows = [];
+  if (startRow <= lastRow) {
+    // 唯讀取最近一週有作答的這幾千列數據，速度提升 200 倍！
+    rows = scoreSheet.getRange(startRow, 1, lastRow - startRow + 1, scoreSheet.getLastColumn()).getValues();
+  }
+  
+  for (var i = 0; i < rows.length; i++) {
     var r = rows[i];
     var mode = cMode !== -1 && r[cMode] ? r[cMode].toString() : "";
     if (mode === "錯題重做") continue;
@@ -1783,7 +1859,7 @@ function buildAndSaveAnalysisCaches(ss) {
     if (!sid) continue;
     
     var sTime = cTime !== -1 ? getRowSeconds(r[cTime]) * 1000 : 0;
-    if (sTime > 0 && sTime < cutoffTime) continue; // 大於 7 天前就直接跳過不分析
+    if (sTime > 0 && sTime < cutoffTime) continue; // 安全防護，大於 7 天前就直接跳過不分析
     
     var jsonStr = cJson !== -1 ? r[cJson] : "";
     if (!jsonStr) continue;
@@ -1866,7 +1942,11 @@ function buildAndSaveAnalysisCaches(ss) {
         return { updatedAt: row[0], qid: row[1], topic: row[2], questionType: row[3], cogType: row[4], questionText: row[5], studentCount: row[6], total: row[7], correct: row[8], rate: row[9], avgSec: row[10], commonWrongOption: row[11] };
       })
     };
-    uploadCacheToFirebase("rankingCaches", "analysisCaches", analysisCacheObj);
+    // 壓縮成單一 json 屬性字串儲存，避開 GAS 轉換巨大 nested object 時的嚴重效能瓶頸
+    var wrapped = {
+      json: JSON.stringify(analysisCacheObj)
+    };
+    uploadCacheToFirebase("rankingCaches", "analysisCaches", wrapped);
   } catch(err) {
     Logger.log("⚠️ 上傳分析快取至 Firebase 失敗：" + err.message);
   }
@@ -2203,12 +2283,16 @@ function manualUpdateScoreTable() {
   writeTodayPracticeCache(ss);
   var analysis = buildAndSaveAnalysisCaches(ss);
   
-  // ★ v1.691 同步上傳 teacherData 快取與各學生的完成度快取至 Firebase
+  // ★ v1.691 明確把最新今日名單推送到 Firebase rankingCaches/home
+  // （因為 writeTodayPracticeCache 只寫試算表，Firebase home 需要額外主動更新）
   try {
-    updateTeacherDataAndStudentProgressFirebase(ss);
+    pushHomeCacheToFirebase(ss);
   } catch(err) {
-    Logger.log("⚠️ 同步 teacherData 與進度快取至 Firebase 失敗：" + err.message);
+    Logger.log("⚠️ 推送首頁排行快取至 Firebase 失敗：" + err.message);
   }
+
+  // ★ NOTE: updateTeacherDataAndStudentProgressFirebase 已移除出此流程，避免超時
+  // 若需更新教師檢視竿的學生歷程快取，請單獨執行：manualSyncTeacherData()
   
   Logger.log("✅ 完成！共 " + count + " 位學生；分析快取：" + JSON.stringify(analysis));
 }
@@ -2375,7 +2459,10 @@ function setRankingCacheProps(passScore, completionTopics, ranking) {
           todayTotal: todayCache.todayTotal,
           todayByClass: todayCache.todayByClass,
           todayDate: todayCache.todayDate,
-          updatedAt: todayCache.updatedAt
+          updatedAt: todayCache.updatedAt,
+          todayUpdatedAt: todayCache.updatedAt, // ★ 對齊時間屬性
+          updatedAtText: localNow(),            // ★ 對齊時間屬性
+          todayStudents: todayCache.todayStudents || [] // ★ 同步發布今日練習學生名單至 Firebase 快取
         };
         
         var writes = [];
@@ -2830,13 +2917,17 @@ function getSheetLastTimeTaipei(sheet) {
   if (lastRow <= 1) {
     return "2000/01/01 00:00:00";
   }
+  // ★ v1.691: 使用 getDisplayValue() 讀取試算表中眼見為憑的字串，徹底避開 Google Sheets 與 GAS 時區不一致導致的 +/- 15h 未來時間 bug
+  var displayVal = sheet.getRange(lastRow, 1).getDisplayValue();
+  var str = (displayVal || "").toString().trim();
+  if (/^\d{4}[/\-]\d{2}[/\-]\d{2}/.test(str)) {
+    return str.replace(/-/g, "/");
+  }
+  
+  // Fallback 萬一沒拿到合規格式
   var val = sheet.getRange(lastRow, 1).getValue();
   if (val instanceof Date) {
     return Utilities.formatDate(val, "Asia/Taipei", "yyyy/MM/dd HH:mm:ss");
-  }
-  var str = (val || "").toString().trim();
-  if (/^\d{4}[/\-]\d{2}[/\-]\d{2}/.test(str)) {
-    return str.replace(/-/g, "/");
   }
   return "2000/01/01 00:00:00";
 }
@@ -3402,6 +3493,7 @@ function logFirebaseDetailsToText() {
               d.questionId || ("Q_" + idx),
               d.questionText || "",
               d.topic || "",
+
               d.selectedText || "",
               d.correctText || "",
               d.isCorrect ? "答對" : "答錯",
@@ -3838,6 +3930,52 @@ function trimAllSheets() {
 // ★ v1.691 新增：Firebase 快取上傳與同步輔助函數
 // ────────────────────────────────────────────────────────
 
+/**
+ * ★ v1.691 明確把首頁排行快取（含今日練習名單）推送至 Firebase rankingCaches/home
+ * 解決 writeTodayPracticeCache 只寫試算表、Firebase 不知道的問題
+ */
+function pushHomeCacheToFirebase(ss) {
+  var props = PropertiesService.getScriptProperties();
+  var projectId = props.getProperty("FIREBASE_PROJECT_ID");
+  if (!projectId) {
+    Logger.log("⚠️ 找不到 FIREBASE_PROJECT_ID，跳過推送首頁快取。");
+    return;
+  }
+  
+  // 讀取最新排行摘要（from Script Properties）
+  var rankingCached = getRankingCacheProps(ss);
+  if (!rankingCached) {
+    Logger.log("⚠️ 排行快取不存在，跳過推送首頁快取。");
+    return;
+  }
+  
+  // 讀取今日練習名單（from Sheet，已確保含 todayStudents）
+  var todayCache = readTodayPracticeCache(ss);
+  
+  var homeCacheObj = {
+    passScore: rankingCached.passScore,
+    completionTopics: rankingCached.completionTopics,
+    ranking: rankingCached.ranking,
+    todayTotal: todayCache.todayTotal,
+    todayByClass: todayCache.todayByClass,
+    todayDate: todayCache.todayDate,
+    updatedAt: todayCache.updatedAt,
+    todayUpdatedAt: todayCache.updatedAt,
+    updatedAtText: localNow(),
+    todayStudents: todayCache.todayStudents || []
+  };
+  
+  var token = firebaseAccessTokenV1685();
+  var writes = [{
+    update: {
+      name: firestoreDocNameV1685(projectId, "rankingCaches", "home"),
+      fields: firebaseFieldsV1685(homeCacheObj)
+    }
+  }];
+  firebaseBatchWriteV1685(projectId, token, writes);
+  Logger.log("✅ 已推送首頁排行快取（含今日名單 " + (todayCache.todayStudents || []).length + " 人）至 Firebase！");
+}
+
 function uploadCacheToFirebase(collection, docId, dataObject) {
   var props = PropertiesService.getScriptProperties();
   var projectId = props.getProperty("FIREBASE_PROJECT_ID");
@@ -3882,18 +4020,30 @@ function updateTeacherDataAndStudentProgressFirebase(ss) {
     }
   }
   
-  // 2. 唯讀前 10 欄，統計學生成績歷史與班級統計
+  // 2. 唯讀前 10 欄，僅取最近 90 天內的成績歷程，防止轉換全歷程超時
   var scoreSheet = ss.getSheetByName(SHEET_SCORES);
   var studentHistory = {};
   var classStats = {};
   var topicTimeStats = {};
-  
+  var histCutoffMs = new Date().getTime() - 90 * 24 * 60 * 60 * 1000; // 90 天前
+
   if (scoreSheet && scoreSheet.getLastRow() > 1) {
-    var scRows = scoreSheet.getRange(1, 1, scoreSheet.getLastRow(), 10).getValues();
-    for (var i = 1; i < scRows.length; i++) {
+    // ★ v1.691 局部載入：由後往前定位 90 天內起始行，避免全表 3.5 萬列壓垮記憶體
+    var lastRow = scoreSheet.getLastRow();
+    var timeCol = scoreSheet.getRange(1, 1, lastRow, 1).getValues();
+    var histStartRow = 2;
+    for (var tt = lastRow - 1; tt >= 1; tt--) {
+      var tv = timeCol[tt][0];
+      var tms = tv ? getRowSeconds(tv) * 1000 : 0;
+      if (tms > 0 && tms < histCutoffMs) { histStartRow = tt + 2; break; }
+    }
+    var scRows = histStartRow <= lastRow
+      ? scoreSheet.getRange(histStartRow, 1, lastRow - histStartRow + 1, 10).getValues()
+      : [];
+    for (var i = 0; i < scRows.length; i++) {
       var sid = scRows[i][1] ? scRows[i][1].toString().trim() : "";
       if (!sid) continue;
-      
+
       var stuInfo = studentInfoMap[sid] || {};
       if (!studentHistory[sid]) {
         studentHistory[sid] = {
@@ -3902,7 +4052,7 @@ function updateTeacherDataAndStudentProgressFirebase(ss) {
           attempts: []
         };
       }
-      
+
       var sDate    = scRows[i][0] ? scRows[i][0].toString() : "";
       var sTopic   = scRows[i][3] ? scRows[i][3].toString() : "";
       var sMode    = scRows[i][4] ? scRows[i][4].toString() : "";
@@ -3912,7 +4062,7 @@ function updateTeacherDataAndStudentProgressFirebase(ss) {
       var sWron    = Number(scRows[i][8]) || 0;
       var sDur     = Number(scRows[i][9]) || 0;
       var isRetry  = sMode === "錯題重做";
-      
+
       studentHistory[sid].attempts.push({
         date:     sDate,
         topic:    sTopic,
@@ -3924,7 +4074,7 @@ function updateTeacherDataAndStudentProgressFirebase(ss) {
         duration: sDur,
         isRetry:  isRetry,
       });
-      
+
       if (!isRetry && sTopic !== "綜合練習" && sDur > 0) {
         var qCount = sCorr + sWron;
         if (qCount > 0) {
@@ -3936,6 +4086,7 @@ function updateTeacherDataAndStudentProgressFirebase(ss) {
       }
     }
   }
+
   
   // 計算 classList
   Object.keys(studentHistory).forEach(function(sid) {

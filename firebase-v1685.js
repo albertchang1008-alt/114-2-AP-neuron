@@ -44,8 +44,11 @@
 
   function normalizeQuestion(doc) {
     var q = doc.data ? doc.data() : doc;
+    var docId = doc.id || q.firebaseQuestionId || q.docId || q.id || "";
     return {
-      id: q.id || doc.id || "",
+      id: q.id || q.originalQuestionId || docId,
+      firebaseQuestionId: q.firebaseQuestionId || docId,
+      originalQuestionId: q.originalQuestionId || q.id || "",
       top: q.top || q.category || "未分類",
       q: q.q || q.question || "",
       options: Array.isArray(q.options) ? q.options : [q.optionA, q.optionB, q.optionC, q.optionD].filter(Boolean),
@@ -75,14 +78,6 @@
     if (!init()) return null;
     if (boot) return boot;
     var c = cfg.collections || {};
-    var snap = await db.collection(c.questions || "questions").get();
-    var questions = [];
-    snap.forEach(function (doc) {
-      var q = normalizeQuestion(doc);
-      if (q.id && q.q) questions.push(q);
-    });
-    if (!questions.length) return null;
-
     var settings = {};
     var rankingCache = null;
     try {
@@ -97,6 +92,15 @@
     } catch (err) {
       console.warn("[v1.69] Firebase 排行讀取失敗，略過：", err);
     }
+    var activeQuestionBankVersion = settings.questionBankVersion || "";
+    var snap = await db.collection(c.questions || "questions").get();
+    var questions = [];
+    snap.forEach(function (doc) {
+      var q = normalizeQuestion(doc);
+      if (activeQuestionBankVersion && q.questionBankVersion !== activeQuestionBankVersion) return;
+      if (q.id && q.q) questions.push(q);
+    });
+    if (!questions.length) return null;
 
     boot = {
       status: "success",
@@ -181,6 +185,7 @@
       detailsJson: JSON.stringify(details.map(function (d, idx) {
         return {
           questionId: d.questionId || ("Q_" + idx),
+          questionFirebaseId: d.questionFirebaseId || d.firebaseQuestionId || d.questionId || ("Q_" + idx),
           questionText: d.questionText || "",
           topic: d.topic || "",
           selectedText: d.selectedText || "",
@@ -202,7 +207,8 @@
     for (var idx = 0; idx < details.length; idx++) {
       var d = details[idx];
       var qid = d.questionId || ("Q_" + idx);
-      var progressId = safeDocId(batch.studentId + "_" + qid);
+      var firebaseQid = d.questionFirebaseId || d.firebaseQuestionId || qid;
+      var progressId = safeDocId(batch.studentId + "_" + firebaseQid);
       var wrongId = progressId;
       
       if (!d.isCorrect) {
@@ -211,6 +217,7 @@
           name: batch.name,
           email: email,
           questionId: qid,
+          questionFirebaseId: firebaseQid,
           questionText: d.questionText || "",
           topic: d.topic || "",
           correctText: d.correctText || "",
@@ -227,6 +234,7 @@
           studentId: batch.studentId,
           email: email,
           questionId: qid,
+          questionFirebaseId: firebaseQid,
           active: false,
           masteredAt: nowField(),
           lastBatchId: batchId
@@ -306,7 +314,10 @@
     var cutoff = hours > 0 ? Date.now() - hours * 60 * 60 * 1000 : 0;
     var bootData = await loadBootstrap();
     var questionMap = {};
-    (bootData && bootData.questions || []).forEach(function (q) { questionMap[q.id] = q; });
+    (bootData && bootData.questions || []).forEach(function (q) {
+      if (q.firebaseQuestionId) questionMap[q.firebaseQuestionId] = q;
+      if (q.id && !questionMap[q.id]) questionMap[q.id] = q;
+    });
 
     var snap = await db.collection(c.wrongQuestions || "wrongQuestions")
       .where("studentId", "==", String(studentId || ""))
@@ -319,7 +330,7 @@
       if (topics.length && !topicSet[w.topic || "未分類"]) return;
       var lastWrongAt = parseClientTime(w.lastWrongAt) || parseClientTime(w.clientCreatedAt);
       if (cutoff && lastWrongAt && lastWrongAt.getTime() < cutoff) return;
-      var q = questionMap[w.questionId];
+      var q = questionMap[w.questionFirebaseId || w.questionId];
       if (q && q.id && q.q) out.push(q);
     });
     return out;

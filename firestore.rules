@@ -60,7 +60,12 @@ service cloud.firestore {
     }
 
     match /loginStates/{studentId} {
-      allow read, write: if true;
+      allow read: if signedIn();
+      allow create, update: if signedIn()
+        && request.resource.data.studentId == studentId
+        && request.resource.data.token is string
+        && request.resource.data.token.size() > 0;
+      allow delete: if false;
     }
 
     match /offlineQueue/{queueId} {
