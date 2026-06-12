@@ -1076,7 +1076,8 @@ async function fetchQuestionBank() {
                 todayTotal:       result.rankingCache.todayTotal ?? 0,
                 todayByClass:     result.rankingCache.todayByClass || {},
                 todayDate:        result.rankingCache.todayDate || "",
-                todayUpdatedAt:   result.rankingCache.todayUpdatedAt || result.rankingCache.updatedAtText || ""
+                todayUpdatedAt:   result.rankingCache.todayUpdatedAt || result.rankingCache.updatedAtText || "",
+                todayStudents:    result.rankingCache.todayStudents || []  // ★ 今日練習學生名單
             };
             hide("ranking-skeleton");
             show("ranking-list");
