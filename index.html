@@ -113,6 +113,17 @@
             </div>
         </div>
         <div id="ranking-list" class="space-y-3 hidden"></div>
+        <!-- 今日練習詳細學生名單（點擊今日人數後展開） -->
+        <div id="ranking-today-students-view" class="hidden mt-4 border-t pt-4">
+            <div class="flex items-start justify-between gap-2 mb-3">
+                <div class="flex items-center gap-2">
+                    <button onclick="closeTodayStudentsView()" class="text-gray-400 hover:text-gray-600 text-sm shrink-0 pt-0.5">← 返回排行</button>
+                    <h3 class="font-bold text-gray-800 leading-snug">今日練習學生名單</h3>
+                </div>
+                <span id="today-students-count-badge" class="text-xs text-green-600 bg-green-50 px-2 py-0.5 rounded-full border border-green-200"></span>
+            </div>
+            <div id="ranking-today-students-list" class="max-h-[300px] overflow-y-auto space-y-2 pr-1"></div>
+        </div>
         <!-- 個人完成度（點班級後展開） -->
         <div id="ranking-student-view" class="hidden mt-4 border-t pt-4">
             <div class="flex items-start gap-2 mb-3">
@@ -2118,6 +2129,7 @@ function renderRankingSection(data) {
     document.getElementById("ranking-pass-badge").textContent = `達標：${passScore} 分`;
     document.getElementById("ranking-list").innerHTML = "";
     document.getElementById("ranking-student-view").classList.add("hidden");
+    document.getElementById("ranking-today-students-view").classList.add("hidden");
 
     if (!ranking.length) {
         document.getElementById("ranking-list").innerHTML =
@@ -2166,17 +2178,25 @@ function renderRankingSection(data) {
 
     // ── 總計 ──
     const totalRow = `<div style="padding-top:10px;border-top:1.5px dashed #e2e8f0;margin-top:2px;">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;">
+        <div class="hover:bg-gray-50/80 p-1 rounded-lg cursor-pointer transition-all duration-200 active:scale-[0.99]" 
+             onclick="openTodayStudentsView()" 
+             style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;"
+             title="點擊查看今日練習學生名單">
             <div style="display:flex;align-items:center;gap:5px;">
                 <span style="font-size:14px;">📅</span>
                 <span style="font-size:12px;color:#64748b;">今天共</span>
                 <span class="today-total" style="font-size:20px;font-weight:900;color:#10b981;line-height:1;">${todayTotal ?? 0}</span>
                 <span style="font-size:12px;color:#64748b;">人練習過</span>
+                <span style="font-size:10px;color:#94a3b8;margin-left:2px;border-bottom:1px dashed #cbd5e1;padding-bottom:1px;">(看名單)</span>
             </div>
             <span style="font-size:11px;color:#94a3b8;background:#f8fafc;padding:2px 8px;border-radius:99px;border:1px solid #e2e8f0;">共 ${totalStudents} 人</span>
         </div>
         <div class="rate-bar" style="height:5px;">
             <div class="rate-bar-fill" style="width:${totalStudents>0?Math.round((todayTotal??0)/totalStudents*100):0}%;background:linear-gradient(90deg,#10b981,#34d399);"></div>
+        </div>
+        <div style="text-align:right;font-size:10px;color:#94a3b8;margin-top:5px;display:flex;justify-content:flex-end;align-items:center;gap:4px;">
+            <span>🕒</span>
+            <span>更新時間：${data.updatedAt ? data.updatedAt.substring(5, 16) : "未知"}</span>
         </div>
     </div>`;
 
@@ -2345,6 +2365,7 @@ function renderResponsiveView(students, topics, passScore, onCellClick, onNameCl
 }
 
 async function openRankingClassView(className) {
+    document.getElementById("ranking-today-students-view").classList.add("hidden");
     if (!rankingData) return;
     let cls = rankingData.ranking.find(r => r.class === className);
     if (!cls) return;
@@ -2405,6 +2426,7 @@ async function openRankingClassView(className) {
 
 function closeRankingStudentView() {
     document.getElementById("ranking-student-view").classList.add("hidden");
+    document.getElementById("ranking-today-students-view").classList.add("hidden");
     document.getElementById("ranking-list").classList.remove("hidden");
     // ★ 還原 app 容器寬度
     const appEl = document.getElementById("app");
@@ -2412,6 +2434,47 @@ function closeRankingStudentView() {
         appEl.className = appEl.dataset.origClass;
         delete appEl.dataset.origClass;
     }
+}
+
+function openTodayStudentsView() {
+    const list = rankingData?.todayStudents || [];
+    
+    document.getElementById("ranking-list").classList.add("hidden");
+    document.getElementById("ranking-student-view").classList.add("hidden");
+    
+    const view = document.getElementById("ranking-today-students-view");
+    view.classList.remove("hidden");
+    
+    document.getElementById("today-students-count-badge").textContent = `共 ${list.length} 人`;
+    
+    const container = document.getElementById("ranking-today-students-list");
+    if (!list.length) {
+        container.innerHTML = '<p class="text-gray-400 text-center py-4 text-sm">今天尚無練習記錄</p>';
+        return;
+    }
+    
+    // 依班級排序，班級內依學號排序
+    const sortedList = [...list].sort((a,b) => {
+        const clsComp = (a.class || "").localeCompare(b.class || "", "zh-TW");
+        if (clsComp !== 0) return clsComp;
+        return (a.studentId || "").localeCompare(b.studentId || "");
+    });
+    
+    container.innerHTML = sortedList.map((s, idx) => {
+        return `<div class="flex items-center justify-between border border-gray-100 rounded-xl p-2.5 bg-gray-50/50">
+            <div class="flex items-center gap-2 min-w-0" style="flex:1;">
+                <span class="text-xs text-gray-400 shrink-0">${idx + 1}.</span>
+                <span class="font-bold text-sm text-gray-800 truncate">${maskName(s.name)}</span>
+                <span class="text-xs text-gray-400 shrink-0">(${s.studentId})</span>
+            </div>
+            <span class="text-xs bg-sky-50 text-sky-600 px-2 py-0.5 rounded-md border border-sky-100 shrink-0">${s.class}</span>
+        </div>`;
+    }).join("");
+}
+
+function closeTodayStudentsView() {
+    document.getElementById("ranking-today-students-view").classList.add("hidden");
+    document.getElementById("ranking-list").classList.remove("hidden");
 }
 
 function backToTopics() {
