@@ -113,10 +113,15 @@ const AdminFirebase = {
               const qTopic = d.topic || topic || "未分類";
               const cogType = d.cogType || "未分類";
 
-              // 累計單元總和 (用於 topicStats)
-              if (!tStatsMap[qTopic]) tStatsMap[qTopic] = { correct: 0, total: 0 };
+              // 累計單元總和 (用於 topicStats 與 topicTimeList)
+              if (!tStatsMap[qTopic]) tStatsMap[qTopic] = { correct: 0, total: 0, totalSec: 0, count: 0 };
               tStatsMap[qTopic].total += 1;
               if (isCorrect) tStatsMap[qTopic].correct += 1;
+              
+              if (d.answerSec !== null && d.answerSec !== undefined) {
+                  tStatsMap[qTopic].totalSec += Number(d.answerSec);
+                  tStatsMap[qTopic].count += 1;
+              }
 
               // 統計每題答錯
               if (!isCorrect) {
@@ -205,27 +210,35 @@ const AdminFirebase = {
       }).sort((a, b) => b.total - a.total);
 
       // -- topicTimeList --
-      const topicTimeList = Object.entries(topicTimeMap).map(([t, map]) => {
-        const intervals = [];
-        // 確保時間連續
-        for (let ts = Math.floor(map.min / 3600000) * 3600000; ts <= map.max; ts += 3600000) {
-          intervals.push({ timestamp: ts, count: map.intervals[ts] || 0 });
-        }
-        return { topic: t, minTime: map.min, maxTime: map.max, intervals: intervals };
-      });
+      const topicTimeList = Object.entries(tStatsMap).map(([t, stats]) => {
+        return { 
+          topic: t, 
+          avgSec: stats.count > 0 ? Math.round(stats.totalSec / stats.count) : 0, 
+          sessionCount: stats.count 
+        };
+      }).sort((a, b) => a.topic.localeCompare(b.topic, "zh-TW"));
 
       // -- classList (班級統計) --
       const classMap = {};
       Object.keys(studentHistory).forEach(sid => {
         const stu = studentHistory[sid];
-        const cls = stu.class;
-        if (!classMap[cls]) classMap[cls] = { class: cls, studentCount: 0, completedSum: 0, allDoneCount: 0, students: [] };
+        const cls = stu.class || "未分班";
+        if (!classMap[cls]) classMap[cls] = { class: cls, studentCount: 0, correct: 0, total: 0, completedSum: 0, allDoneCount: 0, students: [] };
         
+        classMap[cls].studentCount += 1;
+
+        // 計算該學生的歷程加總
+        stu.attempts.forEach(a => {
+          if (!a.isRetry) {
+            classMap[cls].total += (a.correct || 0) + (a.wrong || 0);
+            classMap[cls].correct += (a.correct || 0);
+          }
+        });
+
         // 這裡暫時以所有出現過的 topic 當作要求單元 (若有明確的 reqTopics，應替換為 reqTopics)
         const reqTopics = Object.keys(tStatsMap);
         const completed = reqTopics.filter(t => (stu.best[t] || 0) >= 80).length; // 預設及格分 80
         
-        classMap[cls].studentCount += 1;
         classMap[cls].completedSum += completed;
         if (completed === reqTopics.length && reqTopics.length > 0) classMap[cls].allDoneCount += 1;
         
@@ -233,19 +246,20 @@ const AdminFirebase = {
           sid: sid,
           name: stu.name,
           completed: completed,
-          total: reqTopics.length,
+          totalTopics: reqTopics.length,
           details: reqTopics.map(t => ({ topic: t, best: stu.best[t] || null, passed: (stu.best[t] || 0) >= 80 }))
         });
       });
 
       const classList = Object.values(classMap).map(c => {
+        c.rate = c.total > 0 ? Math.round((c.correct / c.total) * 100) : null;
         c.avgCompleted = c.studentCount > 0 ? Math.round((c.completedSum / c.studentCount) * 10) / 10 : 0;
         const totalReq = Object.keys(tStatsMap).length;
         c.pct = totalReq > 0 ? Math.round((c.avgCompleted / totalReq) * 100) : 0;
         // 學生以完成度排序
         c.students.sort((a, b) => b.completed - a.completed);
         return c;
-      }).sort((a, b) => b.pct - a.pct || a.class.localeCompare(b.class, "zh-TW"));
+      }).sort((a, b) => a.class.localeCompare(b.class, "zh-TW"));
 
       console.log("✅ [AdminFirebase] Transform 處理完成，總耗時:", Date.now() - startTime, "ms");
 
