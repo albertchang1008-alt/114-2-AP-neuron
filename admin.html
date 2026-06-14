@@ -11,6 +11,7 @@
     <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
     <script src="firebase-config.js"></script>
     <script src="firebase-v1685.js"></script>
+    <script src="admin-firebase.js"></script>
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
         .option-btn { transition: all 0.2s ease-in-out; }
@@ -725,6 +726,10 @@
                     <button id="firebase-sync-btn" onclick="syncFirebaseV1685()"
                         class="bg-emerald-500 hover:bg-emerald-600 text-white font-bold px-8 py-3 rounded-xl transition">
                         🔥 同步到 Firebase
+                    </button>
+                    <button id="progress-rebuild-btn" onclick="rebuildStudentProgressFirebase()"
+                        class="bg-violet-500 hover:bg-violet-600 text-white font-bold px-8 py-3 rounded-xl transition">
+                        📊 補回原本成績
                     </button>
                 </div>
                 <p id="settings-save-status" class="text-sm mt-3 font-medium hidden"></p>
@@ -2702,9 +2707,19 @@ async function loadTeacherData() {
         if (window.Firebase1685 && window.Firebase1685.isEnabled()) {
             await window.Firebase1685.ensureSignedIn();
             const db = window.firebase.firestore();
+            
+            // 取得現有快取作為名單基礎
             const docSnap = await db.collection("rankingCaches").doc("teacherData").get();
+            let existingInfoMap = {};
             if (docSnap.exists) {
-                res = docSnap.data();
+                let cache = docSnap.data();
+                if (typeof cache.json === "string") cache = JSON.parse(cache.json);
+                if (cache.studentInfoMap) existingInfoMap = cache.studentInfoMap;
+            }
+            
+            // 呼叫 Firebase 聚合引擎
+            if (window.AdminFirebase) {
+                res = await window.AdminFirebase.fetchAndBuildTeacherData(db, existingInfoMap);
                 res.status = "ok";
             }
         }
@@ -3344,6 +3359,32 @@ async function syncFirebaseV1685() {
     }
 }
 
+async function rebuildStudentProgressFirebase() {
+    const btn = document.getElementById("progress-rebuild-btn");
+    const status = document.getElementById("settings-save-status");
+    const oldText = btn ? btn.textContent : "";
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = "補回中...";
+    }
+    try {
+        const res = await postGAS({ action: "rebuildStudentProgressFirebase" });
+        if (res.status !== "ok") throw new Error(res.message || "補回失敗");
+        status.textContent = `✓ 原本成績已補回 Firebase：${res.count || 0} 位學生，成績紀錄讀取 ${res.scoreRows || 0} 筆、有效 ${res.usedRows || 0} 筆，學生成績總表 ${res.scoreTableCount || 0} 位已更新。`;
+        status.className = "text-sm mt-3 font-medium text-green-600";
+        status.classList.remove("hidden");
+    } catch(e) {
+        status.textContent = "補回原本成績失敗：" + e.message;
+        status.className = "text-sm mt-3 font-medium text-red-500";
+        status.classList.remove("hidden");
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = oldText || "📊 補回原本成績";
+        }
+    }
+}
+
 let detailStatsLoaded  = false;
 let detailStatsLoading = false;
 let analysisCacheLoaded = false;
@@ -3382,7 +3423,17 @@ async function loadAnalysisCache(force) {
             const db = window.firebase.firestore();
             const docSnap = await db.collection("rankingCaches").doc("analysisCaches").get();
             if (docSnap.exists) {
-                res = docSnap.data();
+                const raw = docSnap.data();
+                if (raw && raw.json) {
+                    try {
+                        res = JSON.parse(raw.json);
+                    } catch(jsonErr) {
+                        console.error("解析 JSON 快取失敗，回退至原始資料：", jsonErr);
+                        res = raw;
+                    }
+                } else {
+                    res = raw;
+                }
                 res.status = "ok";
             }
         }
