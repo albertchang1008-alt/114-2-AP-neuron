@@ -61,8 +61,21 @@ const AdminFirebase = {
 
         // 初始化學生歷程
         if (!studentHistory[sid]) {
-          studentHistory[sid] = { name: name, class: stuClass, best: {}, last: {} };
+          studentHistory[sid] = { name: name, class: stuClass, best: {}, last: {}, attempts: [] };
         }
+
+        // 紀錄所有作答歷程
+        studentHistory[sid].attempts.push({
+          date: createdAt,
+          topic: topic,
+          mode: mode,
+          attempt: Number(batch.attempt) || 1,
+          score: score,
+          correct: Number(batch.correctCount) || 0,
+          wrong: Number(batch.wrongCount) || 0,
+          duration: Number(batch.duration) || 0,
+          isRetry: false
+        });
 
         // 更新各單元最高分與最後作答時間
         if (topic) {
@@ -93,20 +106,17 @@ const AdminFirebase = {
         if (batch.detailsJson) {
           try {
             const details = JSON.parse(batch.detailsJson);
-            
-            // 累計單元總和 (用於 topicStats)
-            if (topic) {
-              if (!tStatsMap[topic]) tStatsMap[topic] = { count: 0, totalScore: 0, totalSec: 0 };
-              tStatsMap[topic].count += 1;
-              tStatsMap[topic].totalScore += score;
-              tStatsMap[topic].totalSec += (Number(batch.duration) || 0);
-            }
 
             details.forEach(d => {
               const isCorrect = !!d.isCorrect;
               const qid = d.questionFirebaseId || d.questionId;
-              const qTopic = d.topic || topic;
+              const qTopic = d.topic || topic || "未分類";
               const cogType = d.cogType || "未分類";
+
+              // 累計單元總和 (用於 topicStats)
+              if (!tStatsMap[qTopic]) tStatsMap[qTopic] = { correct: 0, total: 0 };
+              tStatsMap[qTopic].total += 1;
+              if (isCorrect) tStatsMap[qTopic].correct += 1;
 
               // 統計每題答錯
               if (!isCorrect) {
@@ -162,27 +172,27 @@ const AdminFirebase = {
         const avgSec = q.count > 0 ? Number((q.totalSec / q.count).toFixed(1)) : 0;
         return {
           topic: q.topic,
-          qid: q.qid,
+          id: q.qid,
           text: q.text,
           correct: q.correct,
           wrong: q.wrong,
           total: q.total,
-          correctRate: correctRate,
+          rate: correctRate,
           type: q.type || "單選題",
           cogType: q.cogType || "未分類",
           avgSec: avgSec
         };
-      }).sort((a, b) => a.correctRate - b.correctRate); // 預設由答對率低到高排序
+      }).sort((a, b) => a.rate - b.rate); // 預設由答對率低到高排序
 
       // -- topicStats --
       const topicStats = Object.entries(tStatsMap).map(([t, stats]) => {
         return {
           topic: t,
-          count: stats.count,
-          avgScore: stats.count > 0 ? Math.round((stats.totalScore / stats.count) * 10) / 10 : 0,
-          avgSec: stats.count > 0 ? Math.round(stats.totalSec / stats.count) : 0
+          total: stats.total,
+          correct: stats.correct,
+          rate: stats.total > 0 ? Math.round((stats.correct / stats.total) * 100) : 0
         };
-      }).sort((a, b) => b.count - a.count);
+      }).sort((a, b) => b.total - a.total);
 
       // -- cogTypeStats --
       const cogTypeStats = Object.values(cogStatsMap).map(c => {

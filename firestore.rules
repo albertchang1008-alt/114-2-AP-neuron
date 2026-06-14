@@ -32,7 +32,8 @@ service cloud.firestore {
 
     match /answerBatches/{batchId} {
       allow create: if hasStudentId();
-      allow read, update, delete: if false;
+      allow read: if true;
+      allow update, delete: if false;
     }
 
     match /answerDetails/{detailId} {
