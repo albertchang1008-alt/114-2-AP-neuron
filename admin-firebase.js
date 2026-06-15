@@ -10,14 +10,14 @@
 const AdminFirebase = {
   
   /**
-   * 核心進入點：拉取並重組分析資料
+   * 核心進入點：拉取並重組分析資料，並與舊版快取融合 (Merge)
    * @param {firebase.firestore.Firestore} db - 已初始化的 Firestore 實例
-   * @param {Object} existingStudentInfoMap - (Optional) 預先知道的學生名單 Map { sid: { class, name } }
+   * @param {Object} existingCache - (Optional) 舊版的 rankingCaches/teacherData (包含 studentInfoMap 與歷史 studentHistory)
    * @returns {Promise<Object>} 回傳完整的 teacherData 物件
    */
-  async fetchAndBuildTeacherData(db, existingStudentInfoMap = null) {
+  async fetchAndBuildTeacherData(db, existingCache = {}) {
     try {
-      console.log("🚀 [AdminFirebase] 開始從 Firestore 拉取所有 answerBatches...");
+      console.log("🚀 [AdminFirebase] 開始從 Firestore 拉取所有 answerBatches 與融合舊資料...");
       const startTime = Date.now();
       
       // 1. Fetch: 一次性拉取所有批次
@@ -28,9 +28,12 @@ const AdminFirebase = {
       });
       console.log(`📦 [AdminFirebase] 成功拉取 ${batches.length} 筆批次資料，耗時 ${Date.now() - startTime}ms`);
 
-      // 2. 準備 Transform 所需的資料結構
-      const studentInfoMap = existingStudentInfoMap || {}; // sid -> { name, class }
-      const studentHistory = {}; // sid -> { name, class, best: {}, last: {} }
+      // 2. 準備 Transform 所需的資料結構，並直接從現有快取繼承
+      const studentInfoMap = existingCache.studentInfoMap || {}; // sid -> { name, class }
+      
+      // ★ 融合策略 (Merge Strategy)：把舊有的 studentHistory (如果有) 當作底層
+      const studentHistory = existingCache.studentHistory || {}; // sid -> { name, class, best: {}, last: {}, attempts: [] }
+      
       const studentWrongDetails = {}; // sid -> [ { topic, questionText... } ]
       
       const qStatsMap = {}; // questionId -> { text, correct, wrong, topic, type, cogType, totalSec, count }
@@ -59,10 +62,13 @@ const AdminFirebase = {
         }
         const stuClass = studentInfoMap[sid].class || "未分班";
 
-        // 初始化學生歷程
+        // 初始化學生歷程 (若舊快取中沒有該學生)
         if (!studentHistory[sid]) {
           studentHistory[sid] = { name: name, class: stuClass, best: {}, last: {}, attempts: [] };
         }
+        if (!studentHistory[sid].best) studentHistory[sid].best = {};
+        if (!studentHistory[sid].last) studentHistory[sid].last = {};
+        if (!studentHistory[sid].attempts) studentHistory[sid].attempts = [];
 
         // 紀錄所有作答歷程
         studentHistory[sid].attempts.push({
@@ -235,8 +241,11 @@ const AdminFirebase = {
           }
         });
 
-        // 這裡暫時以所有出現過的 topic 當作要求單元 (若有明確的 reqTopics，應替換為 reqTopics)
-        const reqTopics = Object.keys(tStatsMap);
+        // 取得所有出現過的 topic (包含歷史快取與最新資料)
+        const mergedTopics = new Set(Object.keys(tStatsMap));
+        (existingCache.topicStats || []).forEach(t => mergedTopics.add(t.topic));
+        const reqTopics = Array.from(mergedTopics);
+        
         const completed = reqTopics.filter(t => (stu.best[t] || 0) >= 80).length; // 預設及格分 80
         
         classMap[cls].completedSum += completed;
